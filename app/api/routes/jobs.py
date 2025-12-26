@@ -80,7 +80,7 @@ async def create_job(
         f.write(await csv_file.read())
 
     # --------------------------------------------------
-    # 4. Read header
+    # 4. Read CSV header
     # --------------------------------------------------
     with open(raw_csv_path, "r", encoding="utf-8", errors="ignore") as f:
         reader = csv.reader(f)
@@ -116,53 +116,68 @@ async def create_job(
             rows.append(r)
 
     if not rows:
-        raise HTTPException(status_code=400, detail="CSV has no data rows")
+        raise HTTPException(status_code=400, detail="CSV has no data")
 
     train_path = job_dir / "train.csv"
     predict_path = job_dir / "predict.csv"
 
     # ==================================================
-    # Sparse-only geometry
+    # 6. Sparse-only geometry
     # ==================================================
     if scenario == Scenario.sparse_only:
-        measured = []
+        measured_points = []
+
         for r in rows:
-            measured.append({
+            measured_points.append({
                 "x": float(r[x_col]),
                 "y": float(r[y_col]),
                 "value": float(r[v_col]),
             })
 
         canonical = build_canonical_stations_sparse(
-            measured_points=measured,
+            measured_points=measured_points,
             spacing=output_spacing,
         )
 
         train_rows, predict_rows = split_train_predict(canonical)
 
-        # IMPORTANT: remove station_index before CSV write
+        # ---- strip station_index before CSV write ----
+        clean_train = []
         for r in train_rows:
-            r.pop("station_index", None)
+            clean_train.append({
+                "x": r["x"],
+                "y": r["y"],
+                "d_along": r["d_along"],
+                "value": r["value"],
+            })
 
+        clean_predict = []
         for r in predict_rows:
-            r.pop("station_index", None)
+            clean_predict.append({
+                "x": r["x"],
+                "y": r["y"],
+                "d_along": r["d_along"],
+                "value": r["value"],
+            })
 
         with open(train_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(
-                f, fieldnames=["x", "y", "d_along", "value"]
+                f,
+                fieldnames=["x", "y", "d_along", "value"],
             )
             writer.writeheader()
-            writer.writerows(train_rows)
+            writer.writerows(clean_train)
 
         with open(predict_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(
-                f, fieldnames=["x", "y", "d_along", "value"]
+                f,
+                fieldnames=["x", "y", "d_along", "value"],
             )
             writer.writeheader()
-            writer.writerows(predict_rows)
+            writer.writerows(clean_predict)
 
     # ==================================================
-    # Explicit geometry (no generation)
+    # 7. Explicit geometry (no geometry generation)
     # ==================================================
     else:
         if v_col is None:
@@ -189,13 +204,19 @@ async def create_job(
                     "value": float(value),
                 })
 
-        for path, data in [(train_path, train_rows), (predict_path, predict_rows)]:
-            with open(path, "w", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(
-                    f, fieldnames=["x", "y", "value"]
-                )
-                writer.writeheader()
-                writer.writerows(data)
+        with open(train_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(
+                f, fieldnames=["x", "y", "value"]
+            )
+            writer.writeheader()
+            writer.writerows(train_rows)
+
+        with open(predict_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(
+                f, fieldnames=["x", "y", "value"]
+            )
+            writer.writeheader()
+            writer.writerows(predict_rows)
 
     return JobResponse(job_id=job_id, status="accepted")
 
