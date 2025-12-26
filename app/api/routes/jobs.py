@@ -4,7 +4,7 @@
 import uuid
 from pathlib import Path
 import csv
-from math import hypot
+from typing import Optional
 
 # --------------------------------------------------
 # FastAPI imports
@@ -16,6 +16,14 @@ from fastapi import (
     Form,
     HTTPException,
     Path as ApiPath,
+)
+
+# --------------------------------------------------
+# Geometry engine imports
+# --------------------------------------------------
+from app.core.geometry import (
+    build_canonical_stations_sparse,
+    split_train_predict,
 )
 
 # --------------------------------------------------
@@ -37,8 +45,8 @@ async def create_job(
     scenario: Scenario = Form(...),
     x_column: str = Form(...),
     y_column: str = Form(...),
-    value_column: str | None = Form(None),
-    output_spacing: float | None = Form(None),
+    value_column: Optional[str] = Form(None),
+    output_spacing: Optional[float] = Form(None),
     csv_file: UploadFile = File(...),
 ):
     # --------------------------------------------------
@@ -61,32 +69,32 @@ async def create_job(
     # 2. Job ID + workspace
     # --------------------------------------------------
     job_id = f"gaia-{uuid.uuid4().hex[:12]}"
-    base_dir = Path("data") / job_id
-    base_dir.mkdir(parents=True, exist_ok=True)
+    job_dir = Path("data") / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
 
     # --------------------------------------------------
     # 3. Save raw CSV
     # --------------------------------------------------
-    csv_path = base_dir / csv_file.filename
-    with open(csv_path, "wb") as f:
+    raw_csv_path = job_dir / csv_file.filename
+    with open(raw_csv_path, "wb") as f:
         f.write(await csv_file.read())
 
     # --------------------------------------------------
     # 4. Read CSV header (encoding tolerant)
     # --------------------------------------------------
     try:
-        with open(csv_path, "r", encoding="utf-8") as f:
+        with open(raw_csv_path, "r", encoding="utf-8") as f:
             reader = csv.reader(f)
             header = next(reader)
     except UnicodeDecodeError:
-        with open(csv_path, "r", encoding="latin-1") as f:
+        with open(raw_csv_path, "r", encoding="latin-1") as f:
             reader = csv.reader(f)
             header = next(reader)
 
     normalized = {h.strip().lower(): h for h in header}
 
-    def norm(x): 
-        return x.strip().lower()
+    def norm(s: str) -> str:
+        return s.strip().lower()
 
     required = {norm(x_column), norm(y_column)}
     if scenario == Scenario.sparse_only:
@@ -99,105 +107,110 @@ async def create_job(
             detail=f"Missing required column(s): {', '.join(missing)}",
         )
 
+    x_col = normalized[norm(x_column)]
+    y_col = normalized[norm(y_column)]
+    v_col = normalized[norm(value_column)] if value_column else None
+
+    selected_fields = [x_col, y_col]
+    if v_col:
+        selected_fields.append(v_col)
+
     # --------------------------------------------------
     # 5. Load selected columns only
     # --------------------------------------------------
-    selected = [
-        normalized[norm(x_column)],
-        normalized[norm(y_column)],
-    ]
-
-    if scenario == Scenario.sparse_only:
-        selected.append(normalized[norm(value_column)])
-
     rows = []
 
     try:
-        with open(csv_path, "r", encoding="utf-8") as f:
+        with open(raw_csv_path, "r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for r in reader:
-                rows.append({k: r[k] for k in selected})
+                rows.append({k: r[k] for k in selected_fields})
     except UnicodeDecodeError:
-        with open(csv_path, "r", encoding="latin-1") as f:
+        with open(raw_csv_path, "r", encoding="latin-1") as f:
             reader = csv.DictReader(f)
             for r in reader:
-                rows.append({k: r[k] for k in selected})
+                rows.append({k: r[k] for k in selected_fields})
 
     if not rows:
         raise HTTPException(status_code=400, detail="CSV has no data rows")
 
     # --------------------------------------------------
-    # 6. Write canonical CSV
+    # 6. Write selected input snapshot
     # --------------------------------------------------
-    canonical_path = base_dir / "input_selected.csv"
-    with open(canonical_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=selected)
+    input_selected = job_dir / "input_selected.csv"
+    with open(input_selected, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=selected_fields)
         writer.writeheader()
         writer.writerows(rows)
 
-    # --------------------------------------------------
-    # 7. Train / Predict split
-    # --------------------------------------------------
-    train_path = base_dir / "train.csv"
-    predict_path = base_dir / "predict.csv"
+    train_path = job_dir / "train.csv"
+    predict_path = job_dir / "predict.csv"
 
+    # --------------------------------------------------
+    # 7. Sparse-only geometry + train/predict split
+    # --------------------------------------------------
     if scenario == Scenario.sparse_only:
-        with open(train_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=selected)
-            writer.writeheader()
-            writer.writerows(rows)
-
-        with open(predict_path, "w", newline="", encoding="utf-8") as f:
-            csv.DictWriter(f, fieldnames=selected).writeheader()
-
-    else:
-        value_col = normalized[norm(value_column)]
-        train, predict = [], []
+        measured_points = []
 
         for r in rows:
-            if r[value_col] in ("", None):
-                predict.append(r)
-            else:
-                train.append(r)
+            measured_points.append({
+                "x": float(r[x_col]),
+                "y": float(r[y_col]),
+                "value": float(r[v_col]),
+            })
 
-        for path, data in [(train_path, train), (predict_path, predict)]:
-            with open(path, "w", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(f, fieldnames=selected)
-                writer.writeheader()
-                writer.writerows(data)
+        canonical = build_canonical_stations_sparse(
+            measured_points=measured_points,
+            spacing=output_spacing,
+        )
 
-    # --------------------------------------------------
-    # 8. Geometry generation (sparse_only)
-    # --------------------------------------------------
-    if scenario == Scenario.sparse_only:
-        x_col, y_col, v_col = selected
-        pts = [(float(r[x_col]), float(r[y_col])) for r in rows]
+        train_rows, predict_rows = split_train_predict(canonical)
 
-        pts.sort()
-        dist = [0.0]
-
-        for i in range(1, len(pts)):
-            dx = pts[i][0] - pts[i-1][0]
-            dy = pts[i][1] - pts[i-1][1]
-            dist.append(dist[-1] + hypot(dx, dy))
-
-        gen = []
-        d = output_spacing
-
-        while d < dist[-1]:
-            for i in range(1, len(dist)):
-                if dist[i] >= d:
-                    t = (d - dist[i-1]) / (dist[i] - dist[i-1])
-                    x = pts[i-1][0] + t * (pts[i][0] - pts[i-1][0])
-                    y = pts[i-1][1] + t * (pts[i][1] - pts[i-1][1])
-                    gen.append({x_col: x, y_col: y, v_col: ""})
-                    break
-            d += output_spacing
+        with open(train_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=["x", "y", "d_along", "value"],
+            )
+            writer.writeheader()
+            writer.writerows(train_rows)
 
         with open(predict_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=selected)
+            writer = csv.DictWriter(
+                f,
+                fieldnames=["x", "y", "d_along", "value"],
+            )
             writer.writeheader()
-            writer.writerows(gen)
+            writer.writerows(predict_rows)
+
+    # --------------------------------------------------
+    # 8. Explicit-geometry split (no geometry generation)
+    # --------------------------------------------------
+    else:
+        train_rows = []
+        predict_rows = []
+
+        for r in rows:
+            if r[v_col] in ("", None):
+                predict_rows.append({
+                    "x": float(r[x_col]),
+                    "y": float(r[y_col]),
+                    "value": None,
+                })
+            else:
+                train_rows.append({
+                    "x": float(r[x_col]),
+                    "y": float(r[y_col]),
+                    "value": float(r[v_col]),
+                })
+
+        for path, data in [(train_path, train_rows), (predict_path, predict_rows)]:
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(
+                    f,
+                    fieldnames=["x", "y", "value"],
+                )
+                writer.writeheader()
+                writer.writerows(data)
 
     return JobResponse(job_id=job_id, status="accepted")
 
@@ -207,27 +220,22 @@ async def create_job(
 # ==================================================
 @router.get("/{job_id}/preview")
 def preview_geometry(job_id: str = ApiPath(...)):
-    base_dir = Path("data") / job_id
-    train = base_dir / "train.csv"
-    predict = base_dir / "predict.csv"
+    job_dir = Path("data") / job_id
+    train = job_dir / "train.csv"
+    predict = job_dir / "predict.csv"
 
     if not train.exists():
         raise HTTPException(status_code=404, detail="Job not found")
 
     def read_xy(path):
         pts = []
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                keys = reader.fieldnames[:2]
-                for r in reader:
-                    pts.append({"x": float(r[keys[0]]), "y": float(r[keys[1]])})
-        except UnicodeDecodeError:
-            with open(path, "r", encoding="latin-1") as f:
-                reader = csv.DictReader(f)
-                keys = reader.fieldnames[:2]
-                for r in reader:
-                    pts.append({"x": float(r[keys[0]]), "y": float(r[keys[1]])})
+        with open(path, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for r in reader:
+                pts.append({
+                    "x": float(r["x"]),
+                    "y": float(r["y"]),
+                })
         return pts
 
     return {

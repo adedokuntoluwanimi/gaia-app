@@ -2,9 +2,6 @@
 from typing import List, Dict, Optional
 from math import hypot
 
-from numpy import spacing
-from sympy import ordered
-
 TOLERANCE = 1e-3  # meters
 
 Station = Dict[str, Optional[float]]
@@ -196,5 +193,33 @@ def build_canonical_stations_sparse(
     stations = generate_target_stations(with_distance, spacing)
     canonical = classify_stations(stations, with_distance)
     return canonical
+
+def split_train_predict(canonical_stations):
+    """
+    Splits canonical stations into train and predict sets.
+
+    canonical_stations: list of canonical station dicts
+
+    Returns:
+        (train, predict)
+    """
+    train = []
+    predict = []
+
+    for s in canonical_stations:
+        row = {
+            "x": s["x"],
+            "y": s["y"],
+            "d_along": s["d_along"],
+            "value": s["value"]
+        }
+
+        if s["measured"] == 1:
+            train.append(row)
+        else:
+            predict.append(row)
+
+    return train, predict
+
 
 
