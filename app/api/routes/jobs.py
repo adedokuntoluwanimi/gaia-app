@@ -4,6 +4,7 @@
 import uuid
 import os
 from pathlib import Path
+import csv
 
 # --------------------------------------------------
 # FastAPI imports
@@ -96,6 +97,53 @@ async def create_job(
     with open(csv_path, "wb") as f:
         content = await csv_file.read()
         f.write(content)
+        # ==================================================
+    # 4b. CSV header validation (user-defined, non-strict)
+    # ==================================================
+       # ==================================================
+    # 4b. CSV header validation (encoding-tolerant)
+    # ==================================================
+    try:
+        with open(csv_path, "r", newline="", encoding="utf-8") as f:
+            reader = csv.reader(f)
+            raw_header = next(reader)
+    except UnicodeDecodeError:
+        # Fallback for common non-UTF8 CSVs (Excel, instruments)
+        with open(csv_path, "r", newline="", encoding="latin-1") as f:
+            reader = csv.reader(f)
+            raw_header = next(reader)
+    except StopIteration:
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded CSV is empty",
+        )
+
+
+    # Normalize CSV header names
+    normalized_header = {
+        h.strip().lower(): h for h in raw_header
+    }
+
+    # Normalize user-declared column names
+    def normalize(name: str) -> str:
+        return name.strip().lower()
+
+    required_columns = {
+        normalize(x_column),
+        normalize(y_column),
+    }
+
+    if scenario == Scenario.sparse_only:
+        required_columns.add(normalize(value_column))
+
+    missing = required_columns - normalized_header.keys()
+
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Missing required column(s): {', '.join(missing)}",
+        )
+
 
     # ==================================================
     # 5. Return job acceptance response
