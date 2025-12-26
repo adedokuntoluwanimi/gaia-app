@@ -227,24 +227,29 @@ async def create_job(
 @router.get("/{job_id}/preview")
 def preview_geometry(job_id: str = ApiPath(...)):
     job_dir = Path("data") / job_id
-    train = job_dir / "train.csv"
-    predict = job_dir / "predict.csv"
+    train_path = job_dir / "train.csv"
+    predict_path = job_dir / "predict.csv"
 
-    if not train.exists():
+    if not train_path.exists():
         raise HTTPException(status_code=404, detail="Job not found")
 
-    def read_xy(path):
-        pts = []
+    def read_points(path):
+        points = []
         with open(path, "r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
-            for r in reader:
-                pts.append({
-                    "x": float(r["x"]),
-                    "y": float(r["y"]),
+            for idx, row in enumerate(reader):
+                points.append({
+                    "x": float(row["x"]),
+                    "y": float(row["y"]),
+                    "station_index": idx,
                 })
-        return pts
+        return points
+
+    measured = read_points(train_path)
+    generated = read_points(predict_path) if predict_path.exists() else []
 
     return {
-        "measured": read_xy(train),
-        "generated": read_xy(predict) if predict.exists() else [],
+        "measured": measured,
+        "generated": generated,
     }
+
