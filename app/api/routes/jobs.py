@@ -199,6 +199,59 @@ async def create_job(
         )
         writer.writeheader()
         writer.writerows(rows)
+    # ==================================================
+    # 4e. Scenario-based train / predict split
+    # ==================================================
+    train_path = base_dir / "train.csv"
+    predict_path = base_dir / "predict.csv"
+
+    if scenario == Scenario.sparse_only:
+        # All rows are training data
+        with open(train_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=selected_columns,
+            )
+            writer.writeheader()
+            writer.writerows(rows)
+
+        # Empty predict file (geometry will populate later)
+        with open(predict_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=selected_columns,
+            )
+            writer.writeheader()
+
+    else:
+        # explicit_geometry
+        train_rows = []
+        predict_rows = []
+
+        value_col = normalized_to_original[value_column.strip().lower()]
+
+        for r in rows:
+            if r[value_col] in (None, "", " "):
+                predict_rows.append(r)
+            else:
+                train_rows.append(r)
+
+        with open(train_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=selected_columns,
+            )
+            writer.writeheader()
+            writer.writerows(train_rows)
+
+        with open(predict_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=selected_columns,
+            )
+            writer.writeheader()
+            writer.writerows(predict_rows)
+
 
 
     # ==================================================
