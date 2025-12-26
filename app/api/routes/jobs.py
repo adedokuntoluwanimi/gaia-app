@@ -143,6 +143,50 @@ async def create_job(
             status_code=400,
             detail=f"Missing required column(s): {', '.join(missing)}",
         )
+        # ==================================================
+    # 4c. Load selected columns into memory
+    # ==================================================
+
+    # Resolve normalized header → original header mapping
+    normalized_to_original = {
+        h.strip().lower(): h for h in raw_header
+    }
+
+    # Build list of columns to extract
+    selected_columns = [
+        normalized_to_original[x_column.strip().lower()],
+        normalized_to_original[y_column.strip().lower()],
+    ]
+
+    if scenario == Scenario.sparse_only:
+        selected_columns.append(
+            normalized_to_original[value_column.strip().lower()]
+        )
+
+    rows = []
+
+    # Read CSV rows
+    try:
+        with open(csv_path, "r", newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                rows.append(
+                    {col: row[col] for col in selected_columns}
+                )
+    except UnicodeDecodeError:
+        with open(csv_path, "r", newline="", encoding="latin-1") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                rows.append(
+                    {col: row[col] for col in selected_columns}
+                )
+
+    if not rows:
+        raise HTTPException(
+            status_code=400,
+            detail="CSV contains no data rows",
+        )
+
 
 
     # ==================================================
