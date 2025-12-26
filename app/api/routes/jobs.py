@@ -50,6 +50,12 @@ async def create_job(
     csv_file: UploadFile = File(...),
 ):
     # --------------------------------------------------
+    # Normalize empty spacing input
+    # --------------------------------------------------
+    if output_spacing == "":
+        output_spacing = None
+
+    # --------------------------------------------------
     # 1. Scenario validation
     # --------------------------------------------------
     if scenario == Scenario.sparse_only:
@@ -80,7 +86,7 @@ async def create_job(
         f.write(await csv_file.read())
 
     # --------------------------------------------------
-    # 4. Read CSV header
+    # 4. Read header + normalize
     # --------------------------------------------------
     with open(raw_csv_path, "r", encoding="utf-8", errors="ignore") as f:
         reader = csv.reader(f)
@@ -107,7 +113,7 @@ async def create_job(
     v_col = normalized[norm(value_column)] if value_column else None
 
     # --------------------------------------------------
-    # 5. Load rows
+    # 5. Load CSV rows
     # --------------------------------------------------
     rows = []
     with open(raw_csv_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -128,11 +134,20 @@ async def create_job(
         measured_points = []
 
         for r in rows:
-            measured_points.append({
-                "x": float(r[x_col]),
-                "y": float(r[y_col]),
-                "value": float(r[v_col]),
-            })
+            try:
+                measured_points.append({
+                    "x": float(r[x_col]),
+                    "y": float(r[y_col]),
+                    "value": float(r[v_col]),
+                })
+            except (TypeError, ValueError):
+                continue
+
+        if not measured_points:
+            raise HTTPException(
+                status_code=400,
+                detail="No valid measured points found",
+            )
 
         canonical = build_canonical_stations_sparse(
             measured_points=measured_points,
@@ -141,43 +156,42 @@ async def create_job(
 
         train_rows, predict_rows = split_train_predict(canonical)
 
-        # ---- strip station_index before CSV write ----
-        clean_train = []
-        for r in train_rows:
-            clean_train.append({
+        clean_train = [
+            {
                 "x": r["x"],
                 "y": r["y"],
                 "d_along": r["d_along"],
                 "value": r["value"],
-            })
+            }
+            for r in train_rows
+        ]
 
-        clean_predict = []
-        for r in predict_rows:
-            clean_predict.append({
+        clean_predict = [
+            {
                 "x": r["x"],
                 "y": r["y"],
                 "d_along": r["d_along"],
                 "value": r["value"],
-            })
+            }
+            for r in predict_rows
+        ]
 
         with open(train_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(
-                f,
-                fieldnames=["x", "y", "d_along", "value"],
+                f, fieldnames=["x", "y", "d_along", "value"]
             )
             writer.writeheader()
             writer.writerows(clean_train)
 
         with open(predict_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(
-                f,
-                fieldnames=["x", "y", "d_along", "value"],
+                f, fieldnames=["x", "y", "d_along", "value"]
             )
             writer.writeheader()
             writer.writerows(clean_predict)
 
     # ==================================================
-    # 7. Explicit geometry (no geometry generation)
+    # 7. Explicit geometry
     # ==================================================
     else:
         if v_col is None:
@@ -190,19 +204,43 @@ async def create_job(
         predict_rows = []
 
         for r in rows:
-            value = r.get(v_col)
-            if value in ("", None):
+            x_raw = r.get(x_col)
+            y_raw = r.get(y_col)
+
+            if x_raw in ("", None) or y_raw in ("", None):
+                continue
+
+            try:
+                x = float(x_raw)
+                y = float(y_raw)
+            except ValueError:
+                continue
+
+            value_raw = r.get(v_col)
+
+            if value_raw in ("", None):
                 predict_rows.append({
-                    "x": float(r[x_col]),
-                    "y": float(r[y_col]),
+                    "x": x,
+                    "y": y,
                     "value": None,
                 })
             else:
+                try:
+                    value = float(value_raw)
+                except ValueError:
+                    continue
+
                 train_rows.append({
-                    "x": float(r[x_col]),
-                    "y": float(r[y_col]),
-                    "value": float(value),
+                    "x": x,
+                    "y": y,
+                    "value": value,
                 })
+
+        if not train_rows and not predict_rows:
+            raise HTTPException(
+                status_code=400,
+                detail="No valid geometry rows found",
+            )
 
         with open(train_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(
@@ -233,7 +271,7 @@ def preview_geometry(job_id: str = ApiPath(...)):
     if not train_path.exists():
         raise HTTPException(status_code=404, detail="Job not found")
 
-    def read_points(path):
+    def read_points(path: Path):
         points = []
         with open(path, "r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
@@ -252,4 +290,3 @@ def preview_geometry(job_id: str = ApiPath(...)):
         "measured": measured,
         "generated": generated,
     }
-
