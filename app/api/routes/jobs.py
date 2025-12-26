@@ -163,7 +163,7 @@ async def create_job(
             measured_points=measured_points,
             spacing=output_spacing,
         )
-
+        
         train_rows, predict_rows = split_train_predict(canonical)
 
         with open(train_path, "w", newline="", encoding="utf-8") as f:
@@ -182,35 +182,43 @@ async def create_job(
             writer.writeheader()
             writer.writerows(predict_rows)
 
-    # --------------------------------------------------
-    # 8. Explicit-geometry split (no geometry generation)
-    # --------------------------------------------------
-    else:
-        train_rows = []
-        predict_rows = []
+# --------------------------------------------------
+# 8. Explicit-geometry split (no geometry generation)
+# --------------------------------------------------
+else:
+    if v_col is None:
+        raise HTTPException(
+            status_code=400,
+            detail="explicit_geometry requires value_column to be provided",
+        )
 
-        for r in rows:
-            if r[v_col] in ("", None):
-                predict_rows.append({
-                    "x": float(r[x_col]),
-                    "y": float(r[y_col]),
-                    "value": None,
-                })
-            else:
-                train_rows.append({
-                    "x": float(r[x_col]),
-                    "y": float(r[y_col]),
-                    "value": float(r[v_col]),
-                })
+    train_rows = []
+    predict_rows = []
 
-        for path, data in [(train_path, train_rows), (predict_path, predict_rows)]:
-            with open(path, "w", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(
-                    f,
-                    fieldnames=["x", "y", "value"],
-                )
-                writer.writeheader()
-                writer.writerows(data)
+    for r in rows:
+        value = r.get(v_col)
+
+        if value in ("", None):
+            predict_rows.append({
+                "x": float(r[x_col]),
+                "y": float(r[y_col]),
+                "value": None,
+            })
+        else:
+            train_rows.append({
+                "x": float(r[x_col]),
+                "y": float(r[y_col]),
+                "value": float(value),
+            })
+
+    for path, data in [(train_path, train_rows), (predict_path, predict_rows)]:
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=["x", "y", "value"],
+            )
+            writer.writeheader()
+            writer.writerows(data)
 
     return JobResponse(job_id=job_id, status="accepted")
 
