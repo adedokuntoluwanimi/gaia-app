@@ -49,9 +49,9 @@ async def create_job(
     output_spacing: Optional[float] = Form(None),
     csv_file: UploadFile = File(...),
 ):
-    # -----------------------------
-    # Scenario validation
-    # -----------------------------
+    # --------------------------------------------------
+    # 1. Scenario validation
+    # --------------------------------------------------
     if scenario == Scenario.sparse_only:
         if value_column is None or output_spacing is None:
             raise HTTPException(
@@ -65,23 +65,23 @@ async def create_job(
             detail="explicit_geometry must not define output_spacing",
         )
 
-    # -----------------------------
-    # Job workspace
-    # -----------------------------
+    # --------------------------------------------------
+    # 2. Job workspace
+    # --------------------------------------------------
     job_id = f"gaia-{uuid.uuid4().hex[:12]}"
     job_dir = Path("data") / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
 
-    # -----------------------------
-    # Save uploaded CSV
-    # -----------------------------
+    # --------------------------------------------------
+    # 3. Save uploaded CSV
+    # --------------------------------------------------
     raw_csv_path = job_dir / csv_file.filename
     with open(raw_csv_path, "wb") as f:
         f.write(await csv_file.read())
 
-    # -----------------------------
-    # Read CSV header
-    # -----------------------------
+    # --------------------------------------------------
+    # 4. Read header
+    # --------------------------------------------------
     with open(raw_csv_path, "r", encoding="utf-8", errors="ignore") as f:
         reader = csv.reader(f)
         header = next(reader)
@@ -106,9 +106,9 @@ async def create_job(
     y_col = normalized[norm(y_column)]
     v_col = normalized[norm(value_column)] if value_column else None
 
-    # -----------------------------
-    # Load rows
-    # -----------------------------
+    # --------------------------------------------------
+    # 5. Load rows
+    # --------------------------------------------------
     rows = []
     with open(raw_csv_path, "r", encoding="utf-8", errors="ignore") as f:
         reader = csv.DictReader(f)
@@ -116,7 +116,7 @@ async def create_job(
             rows.append(r)
 
     if not rows:
-        raise HTTPException(status_code=400, detail="CSV has no data")
+        raise HTTPException(status_code=400, detail="CSV has no data rows")
 
     train_path = job_dir / "train.csv"
     predict_path = job_dir / "predict.csv"
@@ -140,6 +140,13 @@ async def create_job(
 
         train_rows, predict_rows = split_train_predict(canonical)
 
+        # IMPORTANT: remove station_index before CSV write
+        for r in train_rows:
+            r.pop("station_index", None)
+
+        for r in predict_rows:
+            r.pop("station_index", None)
+
         with open(train_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(
                 f, fieldnames=["x", "y", "d_along", "value"]
@@ -155,7 +162,7 @@ async def create_job(
             writer.writerows(predict_rows)
 
     # ==================================================
-    # Explicit geometry
+    # Explicit geometry (no generation)
     # ==================================================
     else:
         if v_col is None:
