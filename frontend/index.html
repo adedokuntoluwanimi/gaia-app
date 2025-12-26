@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>GEODEV | GAIA</title>
+
+  <!-- ==================================================
+       External libraries
+       ================================================== -->
+
+  <!-- Plotly for geometry visualization -->
+  <script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
+
+  <!-- Fancy font for GEODEV branding -->
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
+
+  <!-- ==================================================
+       Global styling
+       ================================================== -->
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #0e0e0e;
+      color: #ffffff;
+    }
+
+    /* ---------- Header ---------- */
+    .header {
+      display: flex;
+      align-items: center;
+      padding: 18px 28px;
+      border-bottom: 1px solid #222;
+    }
+
+    .geodev {
+      font-family: 'Orbitron', sans-serif;
+      font-size: 30px;          /* larger branding */
+      font-weight: 900;
+      letter-spacing: 3px;
+    }
+
+    .gaia {
+      flex: 1;
+      text-align: center;
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: 4px;
+    }
+
+    /* ---------- Main layout ---------- */
+    .main {
+      display: grid;
+      grid-template-columns: 380px 1fr;
+      height: calc(100vh - 72px);
+    }
+
+    /* ---------- Left control panel ---------- */
+    .panel {
+      padding: 20px;
+      border-right: 1px solid #222;
+      overflow-y: auto;
+    }
+
+    .section {
+      margin-bottom: 22px;
+    }
+
+    .section h3 {
+      margin: 0 0 10px;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #aaa;
+    }
+
+    label {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 6px;
+    }
+
+    input, select {
+      width: 100%;
+      padding: 8px;
+      margin-bottom: 10px;
+      background: #111;
+      color: #fff;
+      border: 1px solid #333;
+    }
+
+    button {
+      width: 100%;
+      padding: 10px;
+      background: #1f6feb;
+      color: #fff;
+      border: none;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    button:hover {
+      background: #388bfd;
+    }
+
+    /* ---------- Plot area ---------- */
+    .plot {
+      padding: 16px;
+    }
+
+    #plot {
+      width: 100%;
+      height: 100%;
+    }
+  </style>
+</head>
+
+<body>
+
+  <!-- ==================================================
+       Header / Branding
+       ================================================== -->
+  <div class="header">
+    <div class="geodev">GEODEV</div>
+    <div class="gaia">GAIA</div>
+  </div>
+
+  <!-- ==================================================
+       Main content
+       ================================================== -->
+  <div class="main">
+
+    <!-- ==============================================
+         LEFT: Input / Controls
+         ============================================== -->
+    <div class="panel">
+
+      <!-- CSV upload -->
+      <div class="section">
+        <h3>Upload CSV</h3>
+        <input type="file" id="csvFile" accept=".csv" />
+      </div>
+
+      <!-- Scenario selection -->
+      <div class="section">
+        <h3>Scenario</h3>
+        <select id="scenario">
+          <option value="sparse_only">Sparse only</option>
+          <option value="explicit_geometry">Explicit geometry</option>
+        </select>
+      </div>
+
+      <!-- Column mapping -->
+      <div class="section">
+        <h3>Column Mapping</h3>
+
+        <label>X column</label>
+        <select id="xColumn"></select>
+
+        <label>Y column</label>
+        <select id="yColumn"></select>
+
+        <label>Value column</label>
+        <select id="valueColumn"></select>
+      </div>
+
+      <!-- Output spacing -->
+      <div class="section">
+        <h3>Output spacing (meters)</h3>
+        <input type="number" id="spacing" value="10" />
+      </div>
+
+      <!-- Submit -->
+      <button type="button" onclick="createJob()">Create Job</button>
+
+
+    </div>
+
+    <!-- ==============================================
+         RIGHT: Geometry preview
+         ============================================== -->
+    <div class="plot">
+      <div id="plot"></div>
+    </div>
+
+  </div>
+
+  <!-- ==================================================
+       JavaScript logic
+       ================================================== -->
+  <script>
+
+    // --------------------------------------------------
+    // State
+    // --------------------------------------------------
+    let csvHeaders = [];
+
+    // --------------------------------------------------
+    // 1. CSV upload → read headers client-side
+    // --------------------------------------------------
+    document.getElementById("csvFile").addEventListener("change", e => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+
+      reader.onload = evt => {
+        const firstLine = evt.target.result.split(/\r?\n/)[0];
+        csvHeaders = firstLine.split(",");
+
+        populateDropdown("xColumn");
+        populateDropdown("yColumn");
+        populateDropdown("valueColumn");
+      };
+
+      reader.readAsText(file);
+    });
+
+    function populateDropdown(id) {
+      const select = document.getElementById(id);
+      select.innerHTML = "";
+
+      csvHeaders.forEach(h => {
+        const opt = document.createElement("option");
+        opt.value = h.trim();
+        opt.textContent = h.trim();
+        select.appendChild(opt);
+      });
+    }
+
+    // --------------------------------------------------
+    // 2. Scenario-aware UI behaviour
+    // --------------------------------------------------
+    document.getElementById("scenario").addEventListener("change", () => {
+      const scenario = document.getElementById("scenario").value;
+      const spacing = document.getElementById("spacing");
+
+      if (scenario === "explicit_geometry") {
+        spacing.disabled = true;
+        spacing.value = "";
+      } else {
+        spacing.disabled = false;
+        spacing.value = "10";
+      }
+    });
+
+    // --------------------------------------------------
+    // 3. Create job → send data to backend
+    // --------------------------------------------------
+    async function createJob() {
+  console.log("Create Job clicked");
+
+  const fileInput = document.getElementById("csvFile");
+  const scenario = document.getElementById("scenario").value;
+  const xCol = document.getElementById("xColumn").value;
+  const yCol = document.getElementById("yColumn").value;
+  const valCol = document.getElementById("valueColumn").value;
+  const spacing = document.getElementById("spacing").value;
+
+  console.log({
+    file: fileInput.files[0],
+    scenario,
+    xCol,
+    yCol,
+    valCol,
+    spacing
+  });
+
+  if (!fileInput.files[0]) {
+    alert("Upload a CSV file");
+    return;
+  }
+
+  if (!xCol || !yCol) {
+    alert("Select X and Y columns");
+    return;
+  }
+
+  if (scenario === "sparse_only") {
+    if (!valCol) {
+      alert("Value column is required for sparse-only");
+      return;
+    }
+    if (!spacing || Number(spacing) <= 0) {
+      alert("Output spacing must be a positive number");
+      return;
+    }
+  }
+
+  const form = new FormData();
+  form.append("csv_file", fileInput.files[0]);
+  form.append("scenario", scenario);
+  form.append("x_column", xCol);
+  form.append("y_column", yCol);
+  form.append("value_column", valCol);
+  form.append("output_spacing", spacing);
+
+  console.log("Submitting job to backend...");
+
+  const res = await fetch("http://127.0.0.1:800/jobs", {
+    method: "POST",
+    body: form
+  });
+
+  console.log("Response status:", res.status);
+
+  if (!res.ok) {
+    const text = await res.text();
+    console.error("Backend error:", text);
+    alert("Backend rejected request");
+    return;
+  }
+
+  const data = await res.json();
+  console.log("Job created:", data);
+
+  loadPreview(data.job_id);
+}
+
+    // --------------------------------------------------
+    // 4. Load geometry preview
+    // --------------------------------------------------
+    async function loadPreview(jobId) {
+      const res = await fetch(`http://127.0.0.1:800/jobs/${jobId}/preview`);
+      const data = await res.json();
+
+      const measured = {
+        x: data.measured.map(p => p.x),
+        y: data.measured.map(p => p.y),
+        mode: "markers+lines",
+        name: "Measured"
+      };
+
+      const generated = {
+        x: data.generated.map(p => p.x),
+        y: data.generated.map(p => p.y),
+        mode: "markers",
+        name: "Generated",
+        marker: { symbol: "circle-open" }
+      };
+
+      Plotly.newPlot("plot", [measured, generated], {
+        paper_bgcolor: "#0e0e0e",
+        plot_bgcolor: "#0e0e0e",
+        xaxis: { color: "#fff" },
+        yaxis: { color: "#fff" },
+        legend: { font: { color: "#fff" } }
+      });
+    }
+
+  </script>
+
+</body>
+</html>

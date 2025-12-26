@@ -2,11 +2,9 @@
 # Standard library imports
 # --------------------------------------------------
 import uuid
-import os
 from pathlib import Path
 import csv
 from math import hypot
-
 
 # --------------------------------------------------
 # FastAPI imports
@@ -17,6 +15,7 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Path as ApiPath,
 )
 
 # --------------------------------------------------
@@ -30,308 +29,208 @@ from app.schemas.job import JobResponse, Scenario
 router = APIRouter()
 
 
+# ==================================================
+# POST /jobs  → create a GAIA job
+# ==================================================
 @router.post("", response_model=JobResponse)
 async def create_job(
-    # --------------------------------------------------
-    # User-declared scenario
-    # --------------------------------------------------
     scenario: Scenario = Form(...),
-
-    # --------------------------------------------------
-    # CSV column mappings
-    # --------------------------------------------------
     x_column: str = Form(...),
     y_column: str = Form(...),
     value_column: str | None = Form(None),
-
-    # --------------------------------------------------
-    # Output control (used only for sparse_only)
-    # --------------------------------------------------
     output_spacing: float | None = Form(None),
-
-    # --------------------------------------------------
-    # Uploaded CSV file
-    # --------------------------------------------------
     csv_file: UploadFile = File(...),
 ):
-    # ==================================================
-    # 1. Scenario enforcement and contract validation
-    # ==================================================
+    # --------------------------------------------------
+    # 1. Scenario enforcement
+    # --------------------------------------------------
     if scenario == Scenario.sparse_only:
-        # Sparse-only requires magnetic values and spacing
-        if value_column is None:
+        if value_column is None or output_spacing is None:
             raise HTTPException(
                 status_code=400,
-                detail="value_column is required for sparse_only scenario",
+                detail="sparse_only requires value_column and output_spacing",
             )
 
-        if output_spacing is None:
-            raise HTTPException(
-                status_code=400,
-                detail="output_spacing is required for sparse_only scenario",
-            )
+    if scenario == Scenario.explicit_geometry and output_spacing is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="explicit_geometry must not define output_spacing",
+        )
 
-    if scenario == Scenario.explicit_geometry:
-        # Explicit geometry forbids synthetic spacing
-        if output_spacing is not None:
-            raise HTTPException(
-                status_code=400,
-                detail="output_spacing must not be provided for explicit_geometry",
-            )
-
-    # ==================================================
-    # 2. Job ID generation
-    # ==================================================
+    # --------------------------------------------------
+    # 2. Job ID + workspace
+    # --------------------------------------------------
     job_id = f"gaia-{uuid.uuid4().hex[:12]}"
-
-    # ==================================================
-    # 3. Job workspace initialization
-    # ==================================================
-    # Each job gets an isolated directory under /data
     base_dir = Path("data") / job_id
     base_dir.mkdir(parents=True, exist_ok=True)
 
-    # ==================================================
-    # 4. Persist raw uploaded CSV (verbatim)
-    # ==================================================
+    # --------------------------------------------------
+    # 3. Save raw CSV
+    # --------------------------------------------------
     csv_path = base_dir / csv_file.filename
-
     with open(csv_path, "wb") as f:
-        content = await csv_file.read()
-        f.write(content)
-        # ==================================================
-    # 4b. CSV header validation (user-defined, non-strict)
-    # ==================================================
-       # ==================================================
-    # 4b. CSV header validation (encoding-tolerant)
-    # ==================================================
+        f.write(await csv_file.read())
+
+    # --------------------------------------------------
+    # 4. Read CSV header (encoding tolerant)
+    # --------------------------------------------------
     try:
-        with open(csv_path, "r", newline="", encoding="utf-8") as f:
+        with open(csv_path, "r", encoding="utf-8") as f:
             reader = csv.reader(f)
-            raw_header = next(reader)
+            header = next(reader)
     except UnicodeDecodeError:
-        # Fallback for common non-UTF8 CSVs (Excel, instruments)
-        with open(csv_path, "r", newline="", encoding="latin-1") as f:
+        with open(csv_path, "r", encoding="latin-1") as f:
             reader = csv.reader(f)
-            raw_header = next(reader)
-    except StopIteration:
-        raise HTTPException(
-            status_code=400,
-            detail="Uploaded CSV is empty",
-        )
+            header = next(reader)
 
+    normalized = {h.strip().lower(): h for h in header}
 
-    # Normalize CSV header names
-    normalized_header = {
-        h.strip().lower(): h for h in raw_header
-    }
+    def norm(x): 
+        return x.strip().lower()
 
-    # Normalize user-declared column names
-    def normalize(name: str) -> str:
-        return name.strip().lower()
-
-    required_columns = {
-        normalize(x_column),
-        normalize(y_column),
-    }
-
+    required = {norm(x_column), norm(y_column)}
     if scenario == Scenario.sparse_only:
-        required_columns.add(normalize(value_column))
+        required.add(norm(value_column))
 
-    missing = required_columns - normalized_header.keys()
-
+    missing = required - normalized.keys()
     if missing:
         raise HTTPException(
             status_code=400,
             detail=f"Missing required column(s): {', '.join(missing)}",
         )
-        # ==================================================
-    # 4c. Load selected columns into memory
-    # ==================================================
 
-    # Resolve normalized header → original header mapping
-    normalized_to_original = {
-        h.strip().lower(): h for h in raw_header
-    }
-
-    # Build list of columns to extract
-    selected_columns = [
-        normalized_to_original[x_column.strip().lower()],
-        normalized_to_original[y_column.strip().lower()],
+    # --------------------------------------------------
+    # 5. Load selected columns only
+    # --------------------------------------------------
+    selected = [
+        normalized[norm(x_column)],
+        normalized[norm(y_column)],
     ]
 
     if scenario == Scenario.sparse_only:
-        selected_columns.append(
-            normalized_to_original[value_column.strip().lower()]
-        )
+        selected.append(normalized[norm(value_column)])
 
     rows = []
 
-    # Read CSV rows
     try:
-        with open(csv_path, "r", newline="", encoding="utf-8") as f:
+        with open(csv_path, "r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
-            for row in reader:
-                rows.append(
-                    {col: row[col] for col in selected_columns}
-                )
+            for r in reader:
+                rows.append({k: r[k] for k in selected})
     except UnicodeDecodeError:
-        with open(csv_path, "r", newline="", encoding="latin-1") as f:
+        with open(csv_path, "r", encoding="latin-1") as f:
             reader = csv.DictReader(f)
-            for row in reader:
-                rows.append(
-                    {col: row[col] for col in selected_columns}
-                )
+            for r in reader:
+                rows.append({k: r[k] for k in selected})
 
     if not rows:
-        raise HTTPException(
-            status_code=400,
-            detail="CSV contains no data rows",
-        )
+        raise HTTPException(status_code=400, detail="CSV has no data rows")
 
-    # ==================================================
-    # 4d. Persist canonical processed CSV
-    # ==================================================
-    processed_csv_path = base_dir / "input_selected.csv"
-
-    with open(processed_csv_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(
-            f,
-            fieldnames=selected_columns,
-        )
+    # --------------------------------------------------
+    # 6. Write canonical CSV
+    # --------------------------------------------------
+    canonical_path = base_dir / "input_selected.csv"
+    with open(canonical_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=selected)
         writer.writeheader()
         writer.writerows(rows)
-    # ==================================================
-    # 4e. Scenario-based train / predict split
-    # ==================================================
+
+    # --------------------------------------------------
+    # 7. Train / Predict split
+    # --------------------------------------------------
     train_path = base_dir / "train.csv"
     predict_path = base_dir / "predict.csv"
 
     if scenario == Scenario.sparse_only:
-        # All rows are training data
         with open(train_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(
-                f,
-                fieldnames=selected_columns,
-            )
+            writer = csv.DictWriter(f, fieldnames=selected)
             writer.writeheader()
             writer.writerows(rows)
 
-        # Empty predict file (geometry will populate later)
         with open(predict_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(
-                f,
-                fieldnames=selected_columns,
-            )
-            writer.writeheader()
+            csv.DictWriter(f, fieldnames=selected).writeheader()
 
     else:
-        # explicit_geometry
-        train_rows = []
-        predict_rows = []
-
-        value_col = normalized_to_original[value_column.strip().lower()]
+        value_col = normalized[norm(value_column)]
+        train, predict = [], []
 
         for r in rows:
-            if r[value_col] in (None, "", " "):
-                predict_rows.append(r)
+            if r[value_col] in ("", None):
+                predict.append(r)
             else:
-                train_rows.append(r)
+                train.append(r)
 
-        with open(train_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(
-                f,
-                fieldnames=selected_columns,
-            )
-            writer.writeheader()
-            writer.writerows(train_rows)
+        for path, data in [(train_path, train), (predict_path, predict)]:
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=selected)
+                writer.writeheader()
+                writer.writerows(data)
 
-        with open(predict_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(
-                f,
-                fieldnames=selected_columns,
-            )
-            writer.writeheader()
-            writer.writerows(predict_rows)
-        # ==================================================
-    # 4f. Geometry generation for sparse_only
-    # ==================================================
+    # --------------------------------------------------
+    # 8. Geometry generation (sparse_only)
+    # --------------------------------------------------
     if scenario == Scenario.sparse_only:
-        x_col = normalized_to_original[x_column.strip().lower()]
-        y_col = normalized_to_original[y_column.strip().lower()]
-        value_col = normalized_to_original[value_column.strip().lower()]
+        x_col, y_col, v_col = selected
+        pts = [(float(r[x_col]), float(r[y_col])) for r in rows]
 
-        # Convert coordinates to float and sort by distance
-        points = []
-        for r in rows:
-            try:
-                x = float(r[x_col])
-                y = float(r[y_col])
-            except ValueError:
-                continue
-            points.append((x, y))
+        pts.sort()
+        dist = [0.0]
 
-        if len(points) < 2:
-            raise HTTPException(
-                status_code=400,
-                detail="At least two stations are required for geometry inference",
-            )
+        for i in range(1, len(pts)):
+            dx = pts[i][0] - pts[i-1][0]
+            dy = pts[i][1] - pts[i-1][1]
+            dist.append(dist[-1] + hypot(dx, dy))
 
-        # Sort points along approximate traverse direction
-        points.sort(key=lambda p: (p[0], p[1]))
-
-        # Compute cumulative distance
-        distances = [0.0]
-        for i in range(1, len(points)):
-            dx = points[i][0] - points[i - 1][0]
-            dy = points[i][1] - points[i - 1][1]
-            distances.append(distances[-1] + hypot(dx, dy))
-
-        total_length = distances[-1]
-
-        # Generate expected stations
-        generated_points = []
+        gen = []
         d = output_spacing
 
-        while d < total_length:
-            # Find segment containing d
-            for i in range(1, len(distances)):
-                if distances[i] >= d:
-                    ratio = (
-                        (d - distances[i - 1]) /
-                        (distances[i] - distances[i - 1])
-                    )
-                    x = points[i - 1][0] + ratio * (
-                        points[i][0] - points[i - 1][0]
-                    )
-                    y = points[i - 1][1] + ratio * (
-                        points[i][1] - points[i - 1][1]
-                    )
-                    generated_points.append((x, y))
+        while d < dist[-1]:
+            for i in range(1, len(dist)):
+                if dist[i] >= d:
+                    t = (d - dist[i-1]) / (dist[i] - dist[i-1])
+                    x = pts[i-1][0] + t * (pts[i][0] - pts[i-1][0])
+                    y = pts[i-1][1] + t * (pts[i][1] - pts[i-1][1])
+                    gen.append({x_col: x, y_col: y, v_col: ""})
                     break
             d += output_spacing
 
-        # Write generated geometry to predict.csv
         with open(predict_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(
-                f,
-                fieldnames=selected_columns,
-            )
+            writer = csv.DictWriter(f, fieldnames=selected)
             writer.writeheader()
-            for x, y in generated_points:
-                writer.writerow({
-                    x_col: x,
-                    y_col: y,
-                    value_col: "",
-                })
+            writer.writerows(gen)
+
+    return JobResponse(job_id=job_id, status="accepted")
 
 
+# ==================================================
+# GET /jobs/{job_id}/preview
+# ==================================================
+@router.get("/{job_id}/preview")
+def preview_geometry(job_id: str = ApiPath(...)):
+    base_dir = Path("data") / job_id
+    train = base_dir / "train.csv"
+    predict = base_dir / "predict.csv"
 
+    if not train.exists():
+        raise HTTPException(status_code=404, detail="Job not found")
 
-    # ==================================================
-    # 5. Return job acceptance response
-    # ==================================================
-    return JobResponse(
-        job_id=job_id,
-        status="accepted",
-    )
+    def read_xy(path):
+        pts = []
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                keys = reader.fieldnames[:2]
+                for r in reader:
+                    pts.append({"x": float(r[keys[0]]), "y": float(r[keys[1]])})
+        except UnicodeDecodeError:
+            with open(path, "r", encoding="latin-1") as f:
+                reader = csv.DictReader(f)
+                keys = reader.fieldnames[:2]
+                for r in reader:
+                    pts.append({"x": float(r[keys[0]]), "y": float(r[keys[1]])})
+        return pts
+
+    return {
+        "measured": read_xy(train),
+        "generated": read_xy(predict) if predict.exists() else [],
+    }
