@@ -187,6 +187,18 @@ async def create_job(
             detail="CSV contains no data rows",
         )
 
+    # ==================================================
+    # 4d. Persist canonical processed CSV
+    # ==================================================
+    processed_csv_path = base_dir / "input_selected.csv"
+
+    with open(processed_csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=selected_columns,
+        )
+        writer.writeheader()
+        writer.writerows(rows)
 
 
     # ==================================================
