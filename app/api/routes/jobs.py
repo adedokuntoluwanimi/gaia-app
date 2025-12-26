@@ -5,6 +5,8 @@ import uuid
 import os
 from pathlib import Path
 import csv
+from math import hypot
+
 
 # --------------------------------------------------
 # FastAPI imports
@@ -251,6 +253,78 @@ async def create_job(
             )
             writer.writeheader()
             writer.writerows(predict_rows)
+        # ==================================================
+    # 4f. Geometry generation for sparse_only
+    # ==================================================
+    if scenario == Scenario.sparse_only:
+        x_col = normalized_to_original[x_column.strip().lower()]
+        y_col = normalized_to_original[y_column.strip().lower()]
+        value_col = normalized_to_original[value_column.strip().lower()]
+
+        # Convert coordinates to float and sort by distance
+        points = []
+        for r in rows:
+            try:
+                x = float(r[x_col])
+                y = float(r[y_col])
+            except ValueError:
+                continue
+            points.append((x, y))
+
+        if len(points) < 2:
+            raise HTTPException(
+                status_code=400,
+                detail="At least two stations are required for geometry inference",
+            )
+
+        # Sort points along approximate traverse direction
+        points.sort(key=lambda p: (p[0], p[1]))
+
+        # Compute cumulative distance
+        distances = [0.0]
+        for i in range(1, len(points)):
+            dx = points[i][0] - points[i - 1][0]
+            dy = points[i][1] - points[i - 1][1]
+            distances.append(distances[-1] + hypot(dx, dy))
+
+        total_length = distances[-1]
+
+        # Generate expected stations
+        generated_points = []
+        d = output_spacing
+
+        while d < total_length:
+            # Find segment containing d
+            for i in range(1, len(distances)):
+                if distances[i] >= d:
+                    ratio = (
+                        (d - distances[i - 1]) /
+                        (distances[i] - distances[i - 1])
+                    )
+                    x = points[i - 1][0] + ratio * (
+                        points[i][0] - points[i - 1][0]
+                    )
+                    y = points[i - 1][1] + ratio * (
+                        points[i][1] - points[i - 1][1]
+                    )
+                    generated_points.append((x, y))
+                    break
+            d += output_spacing
+
+        # Write generated geometry to predict.csv
+        with open(predict_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=selected_columns,
+            )
+            writer.writeheader()
+            for x, y in generated_points:
+                writer.writerow({
+                    x_col: x,
+                    y_col: y,
+                    value_col: "",
+                })
+
 
 
 
