@@ -2,8 +2,9 @@
 # Standard library imports
 # --------------------------------------------------
 import uuid
-from pathlib import Path
 import csv
+import json
+from pathlib import Path
 from typing import Optional
 
 # --------------------------------------------------
@@ -17,6 +18,7 @@ from fastapi import (
     HTTPException,
     Path as ApiPath,
 )
+from fastapi.responses import FileResponse
 
 # --------------------------------------------------
 # Geometry engine imports
@@ -25,6 +27,14 @@ from app.core.geometry import (
     build_canonical_stations_sparse,
     split_train_predict,
 )
+
+# --------------------------------------------------
+# Core pipeline imports
+# --------------------------------------------------
+from app.core.s3_io import upload_job_inputs, download_predictions
+from app.core.sagemaker_async import trigger_inference
+from app.core.merge import merge_job_results
+from app.core.job_status import job_status
 
 # --------------------------------------------------
 # Internal schema imports
@@ -50,13 +60,7 @@ async def create_job(
     csv_file: UploadFile = File(...),
 ):
     # --------------------------------------------------
-    # Normalize empty spacing input
-    # --------------------------------------------------
-    if output_spacing == "":
-        output_spacing = None
-
-    # --------------------------------------------------
-    # 1. Scenario validation
+    # 1. Validate scenario
     # --------------------------------------------------
     if scenario == Scenario.sparse_only:
         if value_column is None or output_spacing is None:
@@ -72,7 +76,7 @@ async def create_job(
         )
 
     # --------------------------------------------------
-    # 2. Job workspace
+    # 2. Create job workspace
     # --------------------------------------------------
     job_id = f"gaia-{uuid.uuid4().hex[:12]}"
     job_dir = Path("data") / job_id
@@ -86,7 +90,7 @@ async def create_job(
         f.write(await csv_file.read())
 
     # --------------------------------------------------
-    # 4. Read header + normalize
+    # 4. Normalize headers
     # --------------------------------------------------
     with open(raw_csv_path, "r", encoding="utf-8", errors="ignore") as f:
         reader = csv.reader(f)
@@ -113,13 +117,10 @@ async def create_job(
     v_col = normalized[norm(value_column)] if value_column else None
 
     # --------------------------------------------------
-    # 5. Load CSV rows
+    # 5. Load rows
     # --------------------------------------------------
-    rows = []
     with open(raw_csv_path, "r", encoding="utf-8", errors="ignore") as f:
-        reader = csv.DictReader(f)
-        for r in reader:
-            rows.append(r)
+        rows = list(csv.DictReader(f))
 
     if not rows:
         raise HTTPException(status_code=400, detail="CSV has no data")
@@ -128,14 +129,14 @@ async def create_job(
     predict_path = job_dir / "predict.csv"
 
     # ==================================================
-    # 6. Sparse-only geometry
+    # 6. Sparse-only scenario
     # ==================================================
     if scenario == Scenario.sparse_only:
-        measured_points = []
+        measured = []
 
         for r in rows:
             try:
-                measured_points.append({
+                measured.append({
                     "x": float(r[x_col]),
                     "y": float(r[y_col]),
                     "value": float(r[v_col]),
@@ -143,55 +144,35 @@ async def create_job(
             except (TypeError, ValueError):
                 continue
 
-        if not measured_points:
+        if not measured:
             raise HTTPException(
                 status_code=400,
                 detail="No valid measured points found",
             )
 
         canonical = build_canonical_stations_sparse(
-            measured_points=measured_points,
+            measured_points=measured,
             spacing=output_spacing,
         )
 
         train_rows, predict_rows = split_train_predict(canonical)
-
-        clean_train = [
-            {
-                "x": r["x"],
-                "y": r["y"],
-                "d_along": r["d_along"],
-                "value": r["value"],
-            }
-            for r in train_rows
-        ]
-
-        clean_predict = [
-            {
-                "x": r["x"],
-                "y": r["y"],
-                "d_along": r["d_along"],
-                "value": r["value"],
-            }
-            for r in predict_rows
-        ]
 
         with open(train_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(
                 f, fieldnames=["x", "y", "d_along", "value"]
             )
             writer.writeheader()
-            writer.writerows(clean_train)
+            writer.writerows(train_rows)
 
         with open(predict_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(
                 f, fieldnames=["x", "y", "d_along", "value"]
             )
             writer.writeheader()
-            writer.writerows(clean_predict)
+            writer.writerows(predict_rows)
 
     # ==================================================
-    # 7. Explicit geometry
+    # 7. Explicit geometry scenario
     # ==================================================
     else:
         if v_col is None:
@@ -204,59 +185,71 @@ async def create_job(
         predict_rows = []
 
         for r in rows:
-            x_raw = r.get(x_col)
-            y_raw = r.get(y_col)
-
-            if x_raw in ("", None) or y_raw in ("", None):
-                continue
-
             try:
-                x = float(x_raw)
-                y = float(y_raw)
-            except ValueError:
+                x = float(r[x_col])
+                y = float(r[y_col])
+            except (TypeError, ValueError):
                 continue
 
-            value_raw = r.get(v_col)
-
-            if value_raw in ("", None):
-                predict_rows.append({
-                    "x": x,
-                    "y": y,
-                    "value": None,
-                })
+            val = r.get(v_col)
+            if val in ("", None):
+                predict_rows.append({"x": x, "y": y, "value": None})
             else:
                 try:
-                    value = float(value_raw)
+                    train_rows.append({
+                        "x": x,
+                        "y": y,
+                        "value": float(val),
+                    })
                 except ValueError:
                     continue
 
-                train_rows.append({
-                    "x": x,
-                    "y": y,
-                    "value": value,
-                })
-
-        if not train_rows and not predict_rows:
-            raise HTTPException(
-                status_code=400,
-                detail="No valid geometry rows found",
-            )
-
         with open(train_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(
-                f, fieldnames=["x", "y", "value"]
-            )
+            writer = csv.DictWriter(f, fieldnames=["x", "y", "value"])
             writer.writeheader()
             writer.writerows(train_rows)
 
         with open(predict_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(
-                f, fieldnames=["x", "y", "value"]
-            )
+            writer = csv.DictWriter(f, fieldnames=["x", "y", "value"])
             writer.writeheader()
             writer.writerows(predict_rows)
 
-    return JobResponse(job_id=job_id, status="accepted")
+    # --------------------------------------------------
+    # 8. Upload inputs to S3
+    # --------------------------------------------------
+    upload_job_inputs(job_id)
+
+    # --------------------------------------------------
+    # 9. Trigger SageMaker inference (hardened)
+    # --------------------------------------------------
+    try:
+        sm_job_name = trigger_inference(job_id)
+    except Exception as e:
+        with open(job_dir / "error.json", "w") as f:
+            json.dump(
+                {
+                    "stage": "inference_trigger",
+                    "error": str(e),
+                },
+                f,
+                indent=2,
+            )
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to trigger SageMaker inference",
+        )
+
+    with open(job_dir / "inference.json", "w") as f:
+        json.dump(
+            {
+                "job_id": job_id,
+                "sagemaker_job_name": sm_job_name,
+            },
+            f,
+            indent=2,
+        )
+
+    return JobResponse(job_id=job_id, status="inferencing")
 
 
 # ==================================================
@@ -272,21 +265,78 @@ def preview_geometry(job_id: str = ApiPath(...)):
         raise HTTPException(status_code=404, detail="Job not found")
 
     def read_points(path: Path):
-        points = []
+        pts = []
         with open(path, "r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
-            for idx, row in enumerate(reader):
-                points.append({
-                    "x": float(row["x"]),
-                    "y": float(row["y"]),
-                    "station_index": idx,
+            for i, r in enumerate(reader):
+                pts.append({
+                    "x": float(r["x"]),
+                    "y": float(r["y"]),
+                    "station_index": i,
                 })
-        return points
-
-    measured = read_points(train_path)
-    generated = read_points(predict_path) if predict_path.exists() else []
+        return pts
 
     return {
-        "measured": measured,
-        "generated": generated,
+        "measured": read_points(train_path),
+        "generated": read_points(predict_path) if predict_path.exists() else [],
     }
+
+
+# ==================================================
+# Auto-merge helper (called during status polling)
+# ==================================================
+def try_merge(job_id: str):
+    job_dir = Path("data") / job_id
+
+    if (job_dir / "final.csv").exists():
+        return
+
+    if (job_dir / "error.json").exists():
+        return
+
+    try:
+        download_predictions(job_id)
+    except Exception:
+        return
+
+    try:
+        merge_job_results(job_id)
+    except Exception as e:
+        with open(job_dir / "error.json", "w") as f:
+            json.dump(
+                {
+                    "stage": "merge",
+                    "error": str(e),
+                },
+                f,
+                indent=2,
+            )
+
+
+# ==================================================
+# GET /jobs/{job_id}/status
+# ==================================================
+@router.get("/{job_id}/status")
+def get_job_status(job_id: str):
+    try_merge(job_id)
+    return {
+        "job_id": job_id,
+        "status": job_status(job_id),
+    }
+
+
+# ==================================================
+# GET /jobs/{job_id}/result
+# ==================================================
+@router.get("/{job_id}/result")
+def get_final_result(job_id: str):
+    final_path = Path("data") / job_id / "final.csv"
+
+    if not final_path.exists():
+        raise HTTPException(status_code=404, detail="Result not ready")
+
+    return FileResponse(
+        path=final_path,
+        filename="final.csv",
+        media_type="text/csv",
+    )
