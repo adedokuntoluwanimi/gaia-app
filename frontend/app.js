@@ -23,10 +23,10 @@ function populate(id) {
   const select = document.getElementById(id);
   select.innerHTML = "";
   csvHeaders.forEach(h => {
-    const o = document.createElement("option");
-    o.value = h.trim();
-    o.textContent = h.trim();
-    select.appendChild(o);
+    const opt = document.createElement("option");
+    opt.value = h.trim();
+    opt.textContent = h.trim();
+    select.appendChild(opt);
   });
 }
 
@@ -39,7 +39,7 @@ document.getElementById("scenario").addEventListener("change", e => {
 });
 
 // --------------------------------------------------
-// Create Job → backend
+// Create Job
 // --------------------------------------------------
 document.getElementById("createJobBtn").addEventListener("click", async () => {
   const fileInput = document.getElementById("csvFile");
@@ -76,21 +76,23 @@ document.getElementById("createJobBtn").addEventListener("click", async () => {
   form.append("x_column", xCol);
   form.append("y_column", yCol);
 
-  if (scenario === "sparse_only") {
+  if (valCol) {
     form.append("value_column", valCol);
+  }
+
+  if (scenario === "sparse_only") {
     form.append("output_spacing", spacing);
   }
 
-  const res = await fetch("http://44.205.0.238/jobs", {
-
-
+  const res = await fetch("/jobs", {
     method: "POST",
     body: form
   });
 
   if (!res.ok) {
     const text = await res.text();
-    alert("Backend error:\n" + text);
+    console.error("Backend error:", text);
+    alert(text);
     return;
   }
 
@@ -102,9 +104,8 @@ document.getElementById("createJobBtn").addEventListener("click", async () => {
 // Load geometry preview
 // --------------------------------------------------
 async function loadPreview(jobId) {
-  const res = await fetch(`http://127.0.0.1:8080/jobs/${jobId}/preview`);
+  const res = await fetch(`/jobs/${jobId}/preview`);
   const data = await res.json();
-
   drawGeometry(data.measured, data.generated);
 }
 
@@ -116,6 +117,7 @@ function drawGeometry(measured, generated) {
   svg.innerHTML = "";
 
   const all = measured.concat(generated);
+  if (all.length === 0) return;
 
   const xs = all.map(p => p.x);
   const ys = all.map(p => p.y);
@@ -129,31 +131,55 @@ function drawGeometry(measured, generated) {
   const width = 1000 - pad * 2;
   const height = 600 - pad * 2;
 
-  function sx(x) {
-    return pad + ((x - minX) / (maxX - minX || 1)) * width;
-  }
+  const sx = x =>
+    pad + ((x - minX) / (maxX - minX || 1)) * width;
 
-  function sy(y) {
-    return pad + height - ((y - minY) / (maxY - minY || 1)) * height;
-  }
+  const sy = y =>
+    pad + height - ((y - minY) / (maxY - minY || 1)) * height;
 
-  // Draw measured
-  measured.forEach(p => {
+  // ----------------------------
+  // Measured stations
+  // ----------------------------
+  measured.forEach((p, i) => {
+    const cx = sx(p.x);
+    const cy = sy(p.y);
+
     const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    c.setAttribute("cx", sx(p.x));
-    c.setAttribute("cy", sy(p.y));
+    c.setAttribute("cx", cx);
+    c.setAttribute("cy", cy);
     c.setAttribute("r", 5);
     c.setAttribute("class", "measured");
     svg.appendChild(c);
+
+    const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    t.setAttribute("x", cx + 6);
+    t.setAttribute("y", cy - 6);
+    t.setAttribute("font-size", "11");
+    t.setAttribute("fill", "#1f6feb");
+    t.textContent = i;
+    svg.appendChild(t);
   });
 
-  // Draw predicted
-  generated.forEach(p => {
+  // ----------------------------
+  // Predicted stations
+  // ----------------------------
+  generated.forEach((p, i) => {
+    const cx = sx(p.x);
+    const cy = sy(p.y);
+
     const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    c.setAttribute("cx", sx(p.x));
-    c.setAttribute("cy", sy(p.y));
+    c.setAttribute("cx", cx);
+    c.setAttribute("cy", cy);
     c.setAttribute("r", 5);
     c.setAttribute("class", "predicted");
     svg.appendChild(c);
+
+    const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    t.setAttribute("x", cx + 6);
+    t.setAttribute("y", cy - 6);
+    t.setAttribute("font-size", "11");
+    t.setAttribute("fill", "#aaa");
+    t.textContent = i;
+    svg.appendChild(t);
   });
 }

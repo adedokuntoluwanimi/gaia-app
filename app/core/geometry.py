@@ -139,17 +139,12 @@ def index_measured_by_distance(points_with_distance):
     return points_with_distance
 def classify_stations(stations, measured_points):
     """
-    Classifies stations as measured or predicted.
-
-    stations: generated geometry stations [{x, y, d_along}]
-    measured_points: measured points with d_along and value
-
-    Returns:
-        Canonical station list with measured and value fields
+    Classifies stations as measured or predicted
+    and assigns a sequential station_index.
     """
     canonical = []
 
-    for s in stations:
+    for idx, s in enumerate(stations):
         matched = None
 
         for m in measured_points:
@@ -159,19 +154,21 @@ def classify_stations(stations, measured_points):
 
         if matched:
             canonical.append({
+                "station_index": idx,
                 "x": s["x"],
                 "y": s["y"],
                 "d_along": s["d_along"],
                 "measured": 1,
-                "value": matched["value"]
+                "value": matched["value"],
             })
         else:
             canonical.append({
+                "station_index": idx,
                 "x": s["x"],
                 "y": s["y"],
                 "d_along": s["d_along"],
                 "measured": 0,
-                "value": None
+                "value": None,
             })
 
     return canonical
@@ -207,16 +204,18 @@ def split_train_predict(canonical_stations):
     predict = []
 
     for s in canonical_stations:
-        row = {
-            "x": s["x"],
-            "y": s["y"],
-            "d_along": s["d_along"],
-            "value": s["value"]
-        }
+       row = {
+    "station_index": s["station_index"],
+    "x": s["x"],
+    "y": s["y"],
+    "d_along": s["d_along"],
+    "value": s["value"],
+}
 
-        if s["measured"] == 1:
+
+    if s["measured"] == 1:
             train.append(row)
-        else:
+    else:
             predict.append(row)
 
     return train, predict
