@@ -4,19 +4,9 @@
   <meta charset="UTF-8" />
   <title>GEODEV | GAIA</title>
 
-  <!-- ==================================================
-       External libraries
-       ================================================== -->
-
-  <!-- Plotly for geometry visualization -->
-  <script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
-
-  <!-- Fancy font for GEODEV branding -->
+  <!-- Branding font -->
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
 
-  <!-- ==================================================
-       Global styling
-       ================================================== -->
   <style>
     body {
       margin: 0;
@@ -35,7 +25,7 @@
 
     .geodev {
       font-family: 'Orbitron', sans-serif;
-      font-size: 30px;          /* larger branding */
+      font-size: 30px;
       font-weight: 900;
       letter-spacing: 3px;
     }
@@ -55,7 +45,7 @@
       height: calc(100vh - 72px);
     }
 
-    /* ---------- Left control panel ---------- */
+    /* ---------- Left panel ---------- */
     .panel {
       padding: 20px;
       border-right: 1px solid #222;
@@ -103,54 +93,62 @@
       background: #388bfd;
     }
 
-    /* ---------- Plot area ---------- */
-    .plot {
+    /* ---------- Visualization ---------- */
+    #visualization {
+      position: relative;
       padding: 16px;
     }
 
-    #plot {
+    svg {
       width: 100%;
       height: 100%;
+      background: #0e0e0e;
+      border-left: 1px solid #222;
     }
-  /* ---------- Bottom-right logo ---------- */
-.corner-logo {
-  position: fixed;
-  bottom: 21px;
-  right: 20px;
-  width: 140px;          /* adjust size if needed */
-  opacity: 0.95;
-  pointer-events: none; /* prevents blocking clicks */
-}
-</style>
+
+    /* ---------- Station symbology ---------- */
+    .measured {
+      fill: #1f6feb;
+    }
+
+    .predicted {
+      fill: none;
+      stroke: #1f6feb;
+      stroke-width: 2;
+      stroke-dasharray: 4 2;
+    }
+
+    /* ---------- Bottom-right logo ---------- */
+    .corner-logo {
+      position: fixed;
+      bottom: 21px;
+      right: 20px;
+      width: 140px;
+      opacity: 0.95;
+      pointer-events: none;
+    }
+  </style>
 </head>
 
 <body>
 
-  <!-- ==================================================
-       Header / Branding
-       ================================================== -->
+  <!-- Header -->
   <div class="header">
     <div class="geodev">GEODEV</div>
     <div class="gaia">GAIA</div>
   </div>
 
-  <!-- ==================================================
-       Main content
-       ================================================== -->
+  <!-- Main -->
   <div class="main">
 
-    <!-- ==============================================
-         LEFT: Input / Controls
-         ============================================== -->
+    <!-- LEFT: Controls -->
     <div class="panel">
 
-      <!-- CSV upload -->
       <div class="section">
         <h3>Upload CSV</h3>
         <input type="file" id="csvFile" accept=".csv" />
       </div>
 
-      <!-- Scenario selection -->
       <div class="section">
         <h3>Scenario</h3>
         <select id="scenario">
@@ -159,7 +157,6 @@
         </select>
       </div>
 
-      <!-- Column mapping -->
       <div class="section">
         <h3>Column Mapping</h3>
 
@@ -173,199 +170,25 @@
         <select id="valueColumn"></select>
       </div>
 
-      <!-- Output spacing -->
       <div class="section">
         <h3>Output spacing (meters)</h3>
         <input type="number" id="spacing" value="10" />
       </div>
 
-      <!-- Submit -->
-      <button type="button" onclick="createJob()">Create Job</button>
-
-
+      <button type="button" id="createJobBtn">Create Job</button>
     </div>
 
-    <!-- ==============================================
-         RIGHT: Geometry preview
-         ============================================== -->
-    <div class="plot">
-      <div id="plot"></div>
+    <!-- RIGHT: Visualization -->
+    <div id="visualization">
+      <svg id="geometry-svg" viewBox="0 0 1000 600" preserveAspectRatio="xMidYMid meet"></svg>
     </div>
 
   </div>
 
-  <!-- ==================================================
-       JavaScript logic
-       ================================================== -->
-  <script>
+  <!-- Logo -->
+  <img src="images/logo.jpeg" alt="GEODEV logo" class="corner-logo" />
 
-    // --------------------------------------------------
-    // State
-    // --------------------------------------------------
-    let csvHeaders = [];
-
-    // --------------------------------------------------
-    // 1. CSV upload → read headers client-side
-    // --------------------------------------------------
-    document.getElementById("csvFile").addEventListener("change", e => {
-      const file = e.target.files[0];
-      if (!file) return;
-
-      const reader = new FileReader();
-
-      reader.onload = evt => {
-        const firstLine = evt.target.result.split(/\r?\n/)[0];
-        csvHeaders = firstLine.split(",");
-
-        populateDropdown("xColumn");
-        populateDropdown("yColumn");
-        populateDropdown("valueColumn");
-      };
-
-      reader.readAsText(file);
-    });
-
-    function populateDropdown(id) {
-      const select = document.getElementById(id);
-      select.innerHTML = "";
-
-      csvHeaders.forEach(h => {
-        const opt = document.createElement("option");
-        opt.value = h.trim();
-        opt.textContent = h.trim();
-        select.appendChild(opt);
-      });
-    }
-
-    // --------------------------------------------------
-    // 2. Scenario-aware UI behaviour
-    // --------------------------------------------------
-    document.getElementById("scenario").addEventListener("change", () => {
-      const scenario = document.getElementById("scenario").value;
-      const spacing = document.getElementById("spacing");
-
-      if (scenario === "explicit_geometry") {
-        spacing.disabled = true;
-        spacing.value = "";
-      } else {
-        spacing.disabled = false;
-        spacing.value = "10";
-      }
-    });
-
-    // --------------------------------------------------
-    // 3. Create job → send data to backend
-    // --------------------------------------------------
-    async function createJob() {
-  console.log("Create Job clicked");
-
-  const fileInput = document.getElementById("csvFile");
-  const scenario = document.getElementById("scenario").value;
-  const xCol = document.getElementById("xColumn").value;
-  const yCol = document.getElementById("yColumn").value;
-  const valCol = document.getElementById("valueColumn").value;
-  const spacing = document.getElementById("spacing").value;
-
-  console.log({
-    file: fileInput.files[0],
-    scenario,
-    xCol,
-    yCol,
-    valCol,
-    spacing
-  });
-
-  if (!fileInput.files[0]) {
-    alert("Upload a CSV file");
-    return;
-  }
-
-  if (!xCol || !yCol) {
-    alert("Select X and Y columns");
-    return;
-  }
-
-  if (scenario === "sparse_only") {
-    if (!valCol) {
-      alert("Value column is required for sparse-only");
-      return;
-    }
-    if (!spacing || Number(spacing) <= 0) {
-      alert("Output spacing must be a positive number");
-      return;
-    }
-  }
-
-  const form = new FormData();
-  form.append("csv_file", fileInput.files[0]);
-  form.append("scenario", scenario);
-  form.append("x_column", xCol);
-  form.append("y_column", yCol);
-  form.append("value_column", valCol);
-  form.append("output_spacing", spacing);
-
-  console.log("Submitting job to backend...");
-
-  const res = await fetch("http://127.0.0.1:800/jobs", {
-    method: "POST",
-    body: form
-  });
-
-  console.log("Response status:", res.status);
-
-  if (!res.ok) {
-    const text = await res.text();
-    console.error("Backend error:", text);
-    alert("Backend rejected request");
-    return;
-  }
-
-  const data = await res.json();
-  console.log("Job created:", data);
-
-  loadPreview(data.job_id);
-}
-
-    // --------------------------------------------------
-    // 4. Load geometry preview
-    // --------------------------------------------------
-    async function loadPreview(jobId) {
-      const res = await fetch(`http://127.0.0.1:800/jobs/${jobId}/preview`);
-      const data = await res.json();
-
-      const measured = {
-        x: data.measured.map(p => p.x),
-        y: data.measured.map(p => p.y),
-        mode: "markers+lines",
-        name: "Measured"
-      };
-
-      const generated = {
-        x: data.generated.map(p => p.x),
-        y: data.generated.map(p => p.y),
-        mode: "markers",
-        name: "Generated",
-        marker: { symbol: "circle-open" }
-      };
-
-      Plotly.newPlot("plot", [measured, generated], {
-        paper_bgcolor: "#0e0e0e",
-        plot_bgcolor: "#0e0e0e",
-        xaxis: { color: "#fff" },
-        yaxis: { color: "#fff" },
-        legend: { font: { color: "#fff" } }
-      });
-    }
-
-  </script>
-<!-- ==============================================
-     Bottom-right logo
-     ============================================== -->
-<img
-  src="images/logo.jpeg"
-  alt="GEODEV logo"
-  class="corner-logo"
-/>
-
+  <!-- App logic -->
+  <script src="app.js"></script>
 </body>
 </html>
