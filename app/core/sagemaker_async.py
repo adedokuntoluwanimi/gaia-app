@@ -14,31 +14,28 @@ def trigger_inference(job_id: str) -> str:
 
     try:
         sm.create_transform_job(
-            TransformJobName=job_name,
+            TransformJobName=transform_job_name,
             ModelName=settings.SAGEMAKER_MODEL_NAME,
             TransformInput={
                 "DataSource": {
                     "S3DataSource": {
                         "S3DataType": "S3Prefix",
-                        "S3Uri": f"s3://{settings.S3_BUCKET}/jobs/{job_id}/input/",
+                        "S3Uri": input_s3_uri,
                     }
                 },
                 "ContentType": "text/csv",
+                "SplitType": "Line",
             },
             TransformOutput={
-                "S3OutputPath": f"s3://{settings.S3_BUCKET}/jobs/{job_id}/output/",
-                "AssembleWith": "Line",
+                "S3OutputPath": output_s3_uri,
             },
             TransformResources={
                 "InstanceType": settings.SAGEMAKER_INSTANCE_TYPE,
                 "InstanceCount": 1,
             },
         )
-
     except Exception as e:
-        print("=== SAGEMAKER CREATE TRANSFORM JOB FAILED ===")
-        print(str(e))
-        traceback.print_exc()
+        print("SAGEMAKER ERROR >>>", repr(e))
         raise
 
     return job_name
