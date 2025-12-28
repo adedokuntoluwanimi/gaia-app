@@ -47,7 +47,9 @@ document.getElementById("scenario").addEventListener("change", e => {
 });
 
 // ---------------- Create Job ----------------
-document.getElementById("createJobBtn").addEventListener("click", async () => {
+document.getElementById("createJobBtn").addEventListener("click", async (e) => {
+  e.preventDefault();
+
   const fileInput = document.getElementById("csvFile");
   const scenario = document.getElementById("scenario").value;
   const xCol = document.getElementById("xColumn").value;
@@ -55,40 +57,56 @@ document.getElementById("createJobBtn").addEventListener("click", async () => {
   const valCol = document.getElementById("valueColumn").value;
   const spacing = document.getElementById("spacing").value;
 
-  if (!fileInput.files[0]) return alert("Upload a CSV file");
-  if (!xCol || !yCol) return alert("Select X and Y columns");
-
-  if (scenario === "sparse_only") {
-    if (!valCol) return alert("Value column required");
-    if (!spacing || Number(spacing) <= 0) return alert("Invalid spacing");
+  if (!fileInput.files[0]) {
+    alert("Upload a CSV file");
+    return;
   }
 
-  const form = new FormData();
-  form.append("csv_file", fileInput.files[0]);
-  form.append("scenario", scenario);
-  form.append("x_column", xCol);
-  form.append("y_column", yCol);
-  if (valCol) form.append("value_column", valCol);
-  if (scenario === "sparse_only") form.append("output_spacing", spacing);
+  if (!xCol || !yCol) {
+    alert("Select X and Y columns");
+    return;
+  }
+
+  if (scenario === "sparse_only") {
+    if (!valCol) {
+      alert("Value column required");
+      return;
+    }
+    if (!spacing || Number(spacing) <= 0) {
+      alert("Invalid spacing");
+      return;
+    }
+  }
+
+  const formData = new FormData();
+  formData.append("csv_file", fileInput.files[0]);
+  formData.append("scenario", scenario);
+  formData.append("x_column", xCol);
+  formData.append("y_column", yCol);
+
+  if (valCol) {
+    formData.append("value_column", valCol);
+  }
+
+  if (scenario === "sparse_only") {
+    formData.append("output_spacing", spacing);
+  }
 
   createBtn.disabled = true;
   statusEl.innerText = "Uploading...";
   downloadBtn.style.display = "none";
 
-  const formData = new FormData();
-
-formData.append("scenario", scenarioSelect.value);
-formData.append("x_column", xSelect.value);
-formData.append("y_column", ySelect.value);
-formData.append("value_column", valueSelect.value);
-formData.append("output_spacing", spacingInput.value);
-formData.append("csv_file", fileInput.files[0]);
-
-fetch("/jobs", {
-    method: "POST",
-    body: formData
-});
-
+  let res;
+  try {
+    res = await fetch("/jobs", {
+      method: "POST",
+      body: formData
+    });
+  } catch (err) {
+    statusEl.innerText = "Network error";
+    createBtn.disabled = false;
+    return;
+  }
 
   if (!res.ok) {
     statusEl.innerText = "Job failed";
@@ -103,6 +121,7 @@ fetch("/jobs", {
   loadPreview(currentJobId);
   pollStatus(currentJobId);
 });
+
 
 // ---------------- Status polling ----------------
 function pollStatus(jobId) {
