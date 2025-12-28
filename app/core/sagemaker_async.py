@@ -1,41 +1,34 @@
 # app/core/sagemaker_async.py
 
-import time
 import boto3
 from app.core.config import settings
 
-sm = boto3.client("sagemaker", region_name=settings.AWS_REGION)
+runtime = boto3.client(
+    "sagemaker-runtime",
+    region_name=settings.AWS_REGION,
+)
+
+ASYNC_ENDPOINT_NAME = "gaia-magnetics-async"
 
 
 def trigger_inference(job_id: str) -> str:
-    import traceback
+    """
+    Invoke SageMaker async endpoint.
+    Input is already in S3.
+    Output will be written by SageMaker to S3.
+    """
 
-    job_name = f"gaia-infer-{job_id}-{int(time.time())}"
+    input_s3 = (
+        f"s3://{settings.S3_BUCKET}/jobs/{job_id}/sagemaker/inference_input.csv"
+    )
 
-    try:
-        sm.create_transform_job(
-            TransformJobName=transform_job_name,
-            ModelName=settings.SAGEMAKER_MODEL_NAME,
-            TransformInput={
-                "DataSource": {
-                    "S3DataSource": {
-                        "S3DataType": "S3Prefix",
-                        "S3Uri": input_s3_uri,
-                    }
-                },
-                "ContentType": "text/csv",
-                "SplitType": "Line",
-            },
-            TransformOutput={
-                "S3OutputPath": output_s3_uri,
-            },
-            TransformResources={
-                "InstanceType": settings.SAGEMAKER_INSTANCE_TYPE,
-                "InstanceCount": 1,
-            },
-        )
-    except Exception as e:
-        print("SAGEMAKER ERROR >>>", repr(e))
-        raise
+    response = runtime.invoke_endpoint_async(
+        EndpointName=ASYNC_ENDPOINT_NAME,
+        InputLocation=input_s3,
+        ContentType="text/csv",
+    )
 
-    return job_name
+    # SageMaker async returns an inference ID
+    inference_id = response["InferenceId"]
+
+    return inference_id
