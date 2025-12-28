@@ -41,9 +41,6 @@ from app.core.job_status import job_status
 # --------------------------------------------------
 from app.schemas.job import JobResponse, Scenario
 
-# --------------------------------------------------
-# Router definition
-# --------------------------------------------------
 router = APIRouter()
 
 
@@ -83,16 +80,16 @@ async def create_job(
     job_dir.mkdir(parents=True, exist_ok=True)
 
     # --------------------------------------------------
-    # 3. Save uploaded CSV
+    # 3. Save uploaded CSV (MANDATORY NAME)
     # --------------------------------------------------
-    raw_csv_path = job_dir / csv_file.filename
-    with open(raw_csv_path, "wb") as f:
+    original_csv = job_dir / "original.csv"
+    with original_csv.open("wb") as f:
         f.write(await csv_file.read())
 
     # --------------------------------------------------
     # 4. Normalize headers
     # --------------------------------------------------
-    with open(raw_csv_path, "r", encoding="utf-8", errors="ignore") as f:
+    with original_csv.open("r", encoding="utf-8", errors="ignore") as f:
         reader = csv.reader(f)
         header = next(reader)
 
@@ -119,7 +116,7 @@ async def create_job(
     # --------------------------------------------------
     # 5. Load rows
     # --------------------------------------------------
-    with open(raw_csv_path, "r", encoding="utf-8", errors="ignore") as f:
+    with original_csv.open("r", encoding="utf-8", errors="ignore") as f:
         rows = list(csv.DictReader(f))
 
     if not rows:
@@ -157,14 +154,14 @@ async def create_job(
 
         train_rows, predict_rows = split_train_predict(canonical)
 
-        with open(train_path, "w", newline="", encoding="utf-8") as f:
+        with train_path.open("w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(
                 f, fieldnames=["x", "y", "d_along", "value"]
             )
             writer.writeheader()
             writer.writerows(train_rows)
 
-        with open(predict_path, "w", newline="", encoding="utf-8") as f:
+        with predict_path.open("w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(
                 f, fieldnames=["x", "y", "d_along", "value"]
             )
@@ -204,12 +201,12 @@ async def create_job(
                 except ValueError:
                     continue
 
-        with open(train_path, "w", newline="", encoding="utf-8") as f:
+        with train_path.open("w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=["x", "y", "value"])
             writer.writeheader()
             writer.writerows(train_rows)
 
-        with open(predict_path, "w", newline="", encoding="utf-8") as f:
+        with predict_path.open("w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=["x", "y", "value"])
             writer.writeheader()
             writer.writerows(predict_rows)
@@ -220,17 +217,14 @@ async def create_job(
     upload_job_inputs(job_id)
 
     # --------------------------------------------------
-    # 9. Trigger SageMaker inference (hardened)
+    # 9. Trigger SageMaker inference
     # --------------------------------------------------
     try:
         sm_job_name = trigger_inference(job_id)
     except Exception as e:
-        with open(job_dir / "error.json", "w") as f:
+        with (job_dir / "error.json").open("w") as f:
             json.dump(
-                {
-                    "stage": "inference_trigger",
-                    "error": str(e),
-                },
+                {"stage": "inference_trigger", "error": str(e)},
                 f,
                 indent=2,
             )
@@ -239,7 +233,7 @@ async def create_job(
             detail="Failed to trigger SageMaker inference",
         )
 
-    with open(job_dir / "inference.json", "w") as f:
+    with (job_dir / "inference.json").open("w") as f:
         json.dump(
             {
                 "job_id": job_id,
@@ -266,7 +260,7 @@ def preview_geometry(job_id: str = ApiPath(...)):
 
     def read_points(path: Path):
         pts = []
-        with open(path, "r", encoding="utf-8") as f:
+        with path.open("r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for i, r in enumerate(reader):
                 pts.append({
@@ -283,7 +277,7 @@ def preview_geometry(job_id: str = ApiPath(...)):
 
 
 # ==================================================
-# Auto-merge helper (called during status polling)
+# Auto-merge helper
 # ==================================================
 def try_merge(job_id: str):
     job_dir = Path("data") / job_id
@@ -296,21 +290,9 @@ def try_merge(job_id: str):
 
     try:
         download_predictions(job_id)
+        merge_job_results(job_id)
     except Exception:
         return
-
-    try:
-        merge_job_results(job_id)
-    except Exception as e:
-        with open(job_dir / "error.json", "w") as f:
-            json.dump(
-                {
-                    "stage": "merge",
-                    "error": str(e),
-                },
-                f,
-                indent=2,
-            )
 
 
 # ==================================================
