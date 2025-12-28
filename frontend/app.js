@@ -120,34 +120,14 @@ document.getElementById("createJobBtn").addEventListener("click", async (e) => {
 
   statusEl.innerText = "Inferencing...";
   loadPreview(currentJobId);
-  pollStatus(currentJobId);
+  downloadBtn.href = `/jobs/${currentJobId}/final`;
+downloadBtn.style.display = "block";
+createBtn.disabled = false;
+statusEl.innerText = "Completed";
+
+ 
 });
 
-
-// ---------------- Status polling ----------------
-function pollStatus(jobId) {
-  pollInterval = setInterval(async () => {
-    const res = await fetch(`/jobs/${jobId}/status`);
-    if (!res.ok) return;
-
-    const data = await res.json();
-    statusEl.innerText = data.status;
-
-    if (data.status === "complete") {
-      clearInterval(pollInterval);
-      statusEl.innerText = "Completed";
-      downloadBtn.href = `/jobs/${jobId}/result`;
-      downloadBtn.style.display = "block";
-      createBtn.disabled = false;
-    }
-
-    if (data.status === "failed") {
-      clearInterval(pollInterval);
-      statusEl.innerText = "Failed";
-      createBtn.disabled = false;
-    }
-  }, 3000);
-}
 
 // ---------------- Geometry preview ----------------
 async function loadPreview(jobId) {
