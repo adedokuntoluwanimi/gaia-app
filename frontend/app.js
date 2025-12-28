@@ -49,6 +49,7 @@ document.getElementById("scenario").addEventListener("change", e => {
 // ---------------- Create Job ----------------
 document.getElementById("createJobBtn").addEventListener("click", async (e) => {
   e.preventDefault();
+  e.stopPropagation();
 
   const fileInput = document.getElementById("csvFile");
   const scenario = document.getElementById("scenario").value;
