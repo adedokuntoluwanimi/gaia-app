@@ -32,7 +32,6 @@ from app.core.geometry import (
 # Core pipeline imports
 # --------------------------------------------------
 from app.core.s3_io import upload_job_inputs, download_predictions
-from app.core.sagemaker_async import trigger_inference
 from app.core.merge import merge_job_results
 from app.core.job_status import job_status
 
@@ -80,7 +79,7 @@ async def create_job(
     job_dir.mkdir(parents=True, exist_ok=True)
 
     # --------------------------------------------------
-    # 3. Save uploaded CSV (MANDATORY NAME)
+    # 3. Save uploaded CSV
     # --------------------------------------------------
     original_csv = job_dir / "original.csv"
     with original_csv.open("wb") as f:
@@ -212,33 +211,25 @@ async def create_job(
             writer.writerows(predict_rows)
 
     # --------------------------------------------------
-    # 8. Upload inputs to S3
-    # --------------------------------------------------
-    upload_job_inputs(job_id)
-
-    # --------------------------------------------------
-    # 9. Trigger SageMaker inference
+    # 8. Upload inputs + trigger async inference
     # --------------------------------------------------
     try:
-        sm_job_name = trigger_inference(job_id)
+        inference_id = upload_job_inputs(job_id)
     except Exception as e:
         with (job_dir / "error.json").open("w") as f:
             json.dump(
-                {"stage": "inference_trigger", "error": str(e)},
+                {"stage": "upload_or_inference", "error": str(e)},
                 f,
                 indent=2,
             )
         raise HTTPException(
             status_code=500,
-            detail="Failed to trigger SageMaker inference",
+            detail="Failed to submit inference job",
         )
 
     with (job_dir / "inference.json").open("w") as f:
         json.dump(
-            {
-                "job_id": job_id,
-                "sagemaker_job_name": sm_job_name,
-            },
+            {"inference_id": inference_id},
             f,
             indent=2,
         )
