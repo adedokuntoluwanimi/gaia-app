@@ -2,9 +2,12 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>GEODEV | GAIA</title>
+  <title>GAIA-MAGNETICS</title>
 
-  <!-- Branding font -->
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="images/favicon.png" />
+
+  <!-- Font -->
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
 
   <style>
@@ -21,6 +24,19 @@
       align-items: center;
       padding: 18px 28px;
       border-bottom: 1px solid #222;
+      position: relative;
+    }
+
+    .brand-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .brand-logo {
+      width: 28px;
+      height: 28px;
+      object-fit: contain;
     }
 
     .geodev {
@@ -31,8 +47,9 @@
     }
 
     .gaia {
-      flex: 1;
-      text-align: center;
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
       font-size: 22px;
       font-weight: 800;
       letter-spacing: 4px;
@@ -87,15 +104,33 @@
       border: none;
       cursor: pointer;
       font-weight: 600;
+      margin-top: 10px;
     }
 
-    button:hover {
-      background: #388bfd;
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    #jobStatus {
+      margin-top: 14px;
+      font-size: 13px;
+      color: #9aa4b2;
+      text-align: center;
+    }
+
+    #downloadBtn {
+      margin-top: 10px;
+      display: none;
+      text-align: center;
+      color: #1f6feb;
+      font-size: 13px;
+      text-decoration: none;
+      font-weight: 600;
     }
 
     /* ---------- Visualization ---------- */
     #visualization {
-      position: relative;
       padding: 16px;
     }
 
@@ -106,7 +141,6 @@
       border-left: 1px solid #222;
     }
 
-    /* ---------- Station symbology ---------- */
     .measured {
       fill: #1f6feb;
     }
@@ -117,16 +151,6 @@
       stroke-width: 2;
       stroke-dasharray: 4 2;
     }
-
-    /* ---------- Bottom-right logo ---------- */
-    .corner-logo {
-      position: fixed;
-      bottom: 21px;
-      right: 20px;
-      width: 140px;
-      opacity: 0.95;
-      pointer-events: none;
-    }
   </style>
 </head>
 
@@ -134,8 +158,10 @@
 
   <!-- Header -->
   <div class="header">
-    <div class="geodev">GEODEV</div>
-    <div class="gaia">GAIA</div>
+    <div class="brand-left">
+            <div class="geodev">GEODEV</div>
+    </div>
+    <div class="gaia">GAIA-MAGNETICS</div>
   </div>
 
   <!-- Main -->
@@ -175,20 +201,27 @@
         <input type="number" id="spacing" value="10" />
       </div>
 
-      <button type="button" id="createJobBtn">Create Job</button>
+      <button id="createJobBtn">Create Job</button>
+      <button id="plotBtn" disabled>Plot Stations vs Values</button>
+
+      <div id="jobStatus"></div>
+      <a id="downloadBtn">Download final CSV</a>
     </div>
 
     <!-- RIGHT: Visualization -->
     <div id="visualization">
-      <svg id="geometry-svg" viewBox="0 0 1000 600" preserveAspectRatio="xMidYMid meet"></svg>
+      <svg id="geometry-svg" viewBox="0 0 1000 600"></svg>
+
+      <canvas
+        id="valueChart"
+        width="1000"
+        height="400"
+        style="display:none; margin-top:20px; border:1px solid #222;"
+      ></canvas>
     </div>
 
   </div>
 
-  <!-- Logo -->
-  <img src="images/logo.jpeg" alt="GEODEV logo" class="corner-logo" />
-
-  <!-- App logic -->
   <script src="app.js"></script>
 </body>
 </html>

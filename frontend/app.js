@@ -1,10 +1,14 @@
 console.log("GAIA frontend loaded");
 
 let csvHeaders = [];
+let currentJobId = null;
+let pollInterval = null;
 
-// --------------------------------------------------
-// CSV header extraction
-// --------------------------------------------------
+const statusEl = document.getElementById("jobStatus");
+const createBtn = document.getElementById("createJobBtn");
+const downloadBtn = document.getElementById("downloadBtn");
+
+// ---------------- CSV headers ----------------
 document.getElementById("csvFile").addEventListener("change", e => {
   const file = e.target.files[0];
   if (!file) return;
@@ -30,17 +34,19 @@ function populate(id) {
   });
 }
 
-// --------------------------------------------------
-// Scenario toggle
-// --------------------------------------------------
+// ---------------- Scenario UX ----------------
 document.getElementById("scenario").addEventListener("change", e => {
   const spacing = document.getElementById("spacing");
-  spacing.disabled = e.target.value === "explicit_geometry";
+  if (e.target.value === "explicit_geometry") {
+    spacing.disabled = true;
+    spacing.value = "";
+  } else {
+    spacing.disabled = false;
+    spacing.value = spacing.value || 10;
+  }
 });
 
-// --------------------------------------------------
-// Create Job
-// --------------------------------------------------
+// ---------------- Create Job ----------------
 document.getElementById("createJobBtn").addEventListener("click", async () => {
   const fileInput = document.getElementById("csvFile");
   const scenario = document.getElementById("scenario").value;
@@ -49,25 +55,12 @@ document.getElementById("createJobBtn").addEventListener("click", async () => {
   const valCol = document.getElementById("valueColumn").value;
   const spacing = document.getElementById("spacing").value;
 
-  if (!fileInput.files[0]) {
-    alert("Upload a CSV file");
-    return;
-  }
-
-  if (!xCol || !yCol) {
-    alert("Select X and Y columns");
-    return;
-  }
+  if (!fileInput.files[0]) return alert("Upload a CSV file");
+  if (!xCol || !yCol) return alert("Select X and Y columns");
 
   if (scenario === "sparse_only") {
-    if (!valCol) {
-      alert("Value column is required");
-      return;
-    }
-    if (!spacing || Number(spacing) <= 0) {
-      alert("Output spacing must be > 0");
-      return;
-    }
+    if (!valCol) return alert("Value column required");
+    if (!spacing || Number(spacing) <= 0) return alert("Invalid spacing");
   }
 
   const form = new FormData();
@@ -75,49 +68,68 @@ document.getElementById("createJobBtn").addEventListener("click", async () => {
   form.append("scenario", scenario);
   form.append("x_column", xCol);
   form.append("y_column", yCol);
+  if (valCol) form.append("value_column", valCol);
+  if (scenario === "sparse_only") form.append("output_spacing", spacing);
 
-  if (valCol) {
-    form.append("value_column", valCol);
-  }
+  createBtn.disabled = true;
+  statusEl.innerText = "Uploading...";
+  downloadBtn.style.display = "none";
 
-  if (scenario === "sparse_only") {
-    form.append("output_spacing", spacing);
-  }
-
-  const res = await fetch("/jobs", {
-    method: "POST",
-    body: form
-  });
+  const res = await fetch("/jobs", { method: "POST", body: form });
 
   if (!res.ok) {
-    const text = await res.text();
-    console.error("Backend error:", text);
-    alert(text);
+    statusEl.innerText = "Job failed";
+    createBtn.disabled = false;
     return;
   }
 
   const data = await res.json();
-  loadPreview(data.job_id);
+  currentJobId = data.job_id;
+
+  statusEl.innerText = "Inferencing...";
+  loadPreview(currentJobId);
+  pollStatus(currentJobId);
 });
 
-// --------------------------------------------------
-// Load geometry preview
-// --------------------------------------------------
+// ---------------- Status polling ----------------
+function pollStatus(jobId) {
+  pollInterval = setInterval(async () => {
+    const res = await fetch(`/jobs/${jobId}/status`);
+    if (!res.ok) return;
+
+    const data = await res.json();
+    statusEl.innerText = data.status;
+
+    if (data.status === "complete") {
+      clearInterval(pollInterval);
+      statusEl.innerText = "Completed";
+      downloadBtn.href = `/jobs/${jobId}/result`;
+      downloadBtn.style.display = "block";
+      createBtn.disabled = false;
+    }
+
+    if (data.status === "failed") {
+      clearInterval(pollInterval);
+      statusEl.innerText = "Failed";
+      createBtn.disabled = false;
+    }
+  }, 3000);
+}
+
+// ---------------- Geometry preview ----------------
 async function loadPreview(jobId) {
   const res = await fetch(`/jobs/${jobId}/preview`);
+  if (!res.ok) return;
   const data = await res.json();
   drawGeometry(data.measured, data.generated);
 }
 
-// --------------------------------------------------
-// SVG rendering
-// --------------------------------------------------
 function drawGeometry(measured, generated) {
   const svg = document.getElementById("geometry-svg");
   svg.innerHTML = "";
 
   const all = measured.concat(generated);
-  if (all.length === 0) return;
+  if (!all.length) return;
 
   const xs = all.map(p => p.x);
   const ys = all.map(p => p.y);
@@ -128,58 +140,21 @@ function drawGeometry(measured, generated) {
   const maxY = Math.max(...ys);
 
   const pad = 40;
-  const width = 1000 - pad * 2;
-  const height = 600 - pad * 2;
+  const w = 1000 - pad * 2;
+  const h = 600 - pad * 2;
 
-  const sx = x =>
-    pad + ((x - minX) / (maxX - minX || 1)) * width;
+  const sx = x => pad + ((x - minX) / (maxX - minX || 1)) * w;
+  const sy = y => pad + h - ((y - minY) / (maxY - minY || 1)) * h;
 
-  const sy = y =>
-    pad + height - ((y - minY) / (maxY - minY || 1)) * height;
+  measured.forEach(p => drawPoint(svg, sx(p.x), sy(p.y), "measured"));
+  generated.forEach(p => drawPoint(svg, sx(p.x), sy(p.y), "predicted"));
+}
 
-  // ----------------------------
-  // Measured stations
-  // ----------------------------
-  measured.forEach((p, i) => {
-    const cx = sx(p.x);
-    const cy = sy(p.y);
-
-    const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    c.setAttribute("cx", cx);
-    c.setAttribute("cy", cy);
-    c.setAttribute("r", 5);
-    c.setAttribute("class", "measured");
-    svg.appendChild(c);
-
-    const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
-    t.setAttribute("x", cx + 6);
-    t.setAttribute("y", cy - 6);
-    t.setAttribute("font-size", "11");
-    t.setAttribute("fill", "#1f6feb");
-    t.textContent = i;
-    svg.appendChild(t);
-  });
-
-  // ----------------------------
-  // Predicted stations
-  // ----------------------------
-  generated.forEach((p, i) => {
-    const cx = sx(p.x);
-    const cy = sy(p.y);
-
-    const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    c.setAttribute("cx", cx);
-    c.setAttribute("cy", cy);
-    c.setAttribute("r", 5);
-    c.setAttribute("class", "predicted");
-    svg.appendChild(c);
-
-    const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
-    t.setAttribute("x", cx + 6);
-    t.setAttribute("y", cy - 6);
-    t.setAttribute("font-size", "11");
-    t.setAttribute("fill", "#aaa");
-    t.textContent = i;
-    svg.appendChild(t);
-  });
+function drawPoint(svg, x, y, cls) {
+  const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+  c.setAttribute("cx", x);
+  c.setAttribute("cy", y);
+  c.setAttribute("r", 5);
+  c.setAttribute("class", cls);
+  svg.appendChild(c);
 }
