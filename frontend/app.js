@@ -75,7 +75,20 @@ document.getElementById("createJobBtn").addEventListener("click", async () => {
   statusEl.innerText = "Uploading...";
   downloadBtn.style.display = "none";
 
-  const res = await fetch("/jobs", { method: "POST", body: form });
+  const formData = new FormData();
+
+formData.append("scenario", scenarioSelect.value);
+formData.append("x_column", xSelect.value);
+formData.append("y_column", ySelect.value);
+formData.append("value_column", valueSelect.value);
+formData.append("output_spacing", spacingInput.value);
+formData.append("csv_file", fileInput.files[0]);
+
+fetch("/jobs", {
+    method: "POST",
+    body: formData
+});
+
 
   if (!res.ok) {
     statusEl.innerText = "Job failed";
